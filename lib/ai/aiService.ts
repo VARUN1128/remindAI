@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AIExtractedPayload } from '@/types';
 import { validateAIOutput } from '@/lib/validation/aiOutputSchema';
 import { mockParseUserMessage } from './mockAi';
-import { getCurrentISOString } from '@/lib/utils/dateUtils';
+import { getCurrentISOString, calculateRelativeInstant } from '@/lib/utils/dateUtils';
 
 const apiKey = process.env.GEMINI_API_KEY || '';
 const isGeminiConfigured = Boolean(
@@ -39,26 +39,30 @@ Pending Context: ${pendingContext ? JSON.stringify(pendingContext) : 'None'}
 
 Return ONLY a single valid JSON object matching this exact schema:
 {
-  "intent": "CREATE_REMINDER" | "UPDATE_REMINDER" | "CANCEL_REMINDER" | "LIST_REMINDERS" | "CLARIFY" | "OUT_OF_SCOPE" | "ACKNOWLEDGEMENT" | "COMMAND",
+  "intent": "CREATE_REMINDER" | "UPDATE_REMINDER" | "CANCEL_REMINDER" | "LIST_REMINDERS" | "CLARIFY" | "OUT_OF_SCOPE" | "GREETING" | "ACKNOWLEDGEMENT" | "COMMAND",
   "title": string | null,
   "event_time": string (ISO 8601 timestamp with offset e.g. 2026-10-10T18:00:00+05:30) | null,
   "reminder_time": string (ISO 8601 timestamp with offset) | null,
   "timezone": "${timezone}",
+  "time_type": "absolute" | "relative" | "recurring" | null,
+  "duration_seconds": number | null,
   "recurrence": "none" | "daily" | "weekly" | "monthly" | "custom" | null,
   "target": "${chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP'}",
   "needs_clarification": boolean,
   "clarification_question": string | null,
+  "conversational_response": string | null,
   "search_query": string | null,
   "missing_field": "title" | "time" | "event_time" | "selection" | null
 }
 
 CRITICAL CONVERSATIONAL RULES:
-1. SLASH COMMANDS: If message starts with '/start' or '/help', set intent="COMMAND", title="/start". If '/cancel', set intent="CANCEL_REMINDER", title="cancel_active_context".
-2. ACKNOWLEDGEMENTS: If message is a conversational thank you/thanks/ok/okay/done/great/perfect, set intent="ACKNOWLEDGEMENT". NEVER create a reminder or ask a clarification question for acknowledgements.
-3. RELATIVE DURATION: For relative duration phrases like "in 2 minutes", "within 2mins", "after 2 minutes", "in 30 seconds", "within 1 hour", "in 3 hours", calculate reminder_time strictly as Current Reference Time + specified duration. NEVER interpret relative duration numbers as absolute clock time (e.g., "2 minutes" must NOT be 2:00 AM).
-4. ABSOLUTE CLOCK TIME: "at 2 AM" means clock time 2:00 AM. "tomorrow at 2 AM" means tomorrow 2:00 AM.
-5. CLARIFICATION: NEVER guess missing date/time for incomplete requests. Set intent="CLARIFY" only when there is genuinely missing scheduling info for a reminder request.
-6. Do NOT include markdown formatting or commentary. Return ONLY valid JSON.
+1. GREETINGS: If message is a greeting like "hi", "hello", "hey", "good morning", set intent="GREETING", conversational_response="Hi! 👋 What would you like me to remind you about?". NEVER create a reminder or clarification for greetings.
+2. SLASH COMMANDS: If message starts with '/start' or '/help', set intent="COMMAND", title="/start". If '/cancel', set intent="CANCEL_REMINDER", title="cancel_active_context".
+3. ACKNOWLEDGEMENTS: If message is a conversational thank you/thanks/ok/okay/done/great/perfect, set intent="ACKNOWLEDGEMENT", conversational_response="You're welcome! 😊". NEVER create a reminder or clarification for acknowledgements.
+4. RELATIVE DURATION: For relative duration phrases like "in 2 minutes", "within 2mins", "after 2 minutes", "in 30 seconds", "within 1 hour", set time_type="relative" and duration_seconds=<number of seconds>. Do NOT invent absolute clock time for relative durations.
+5. ABSOLUTE CLOCK TIME: "at 3 AM" means 3:00 AM local time in user's configured timezone. Set time_type="absolute".
+6. CLARIFICATION: NEVER guess missing date/time for incomplete requests. Set intent="CLARIFY" only when there is genuinely missing scheduling info for a reminder request.
+7. Do NOT include markdown formatting or commentary. Return ONLY valid JSON.
 `;
 
     const result = await model.generateContent([
@@ -70,7 +74,11 @@ CRITICAL CONVERSATIONAL RULES:
     const validation = validateAIOutput(responseText);
 
     if (validation.success && validation.data) {
-      return validation.data as AIExtractedPayload;
+      const payload = validation.data as AIExtractedPayload;
+      if (payload.time_type === 'relative' && typeof payload.duration_seconds === 'number') {
+        payload.reminder_time = calculateRelativeInstant(payload.duration_seconds, new Date(), timezone);
+      }
+      return payload;
     }
 
     console.warn('Gemini response validation failed, falling back to mock parser:', validation.error);

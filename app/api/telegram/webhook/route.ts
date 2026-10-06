@@ -64,6 +64,12 @@ export async function POST(req: NextRequest) {
 
     // 4. Execute Intent Action
     switch (aiResult.intent) {
+      case 'GREETING': {
+        await ContextManager.clearContext(dbChat.id, dbUser.id);
+        responseText = aiResult.conversational_response || 'Hi! 👋 What would you like me to remind you about?';
+        break;
+      }
+
       case 'COMMAND': {
         await ContextManager.clearContext(dbChat.id, dbUser.id);
         if (userText.toLowerCase().startsWith('/cancel')) {

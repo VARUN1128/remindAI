@@ -7,9 +7,12 @@ export const AIIntentSchema = z.enum([
   'LIST_REMINDERS',
   'CLARIFY',
   'OUT_OF_SCOPE',
+  'GREETING',
   'ACKNOWLEDGEMENT',
   'COMMAND',
 ]);
+
+export const TimeTypeSchema = z.enum(['absolute', 'relative', 'recurring']).nullable().optional();
 
 export const TargetAudienceSchema = z.enum(['PRIVATE_CHAT', 'GROUP']).nullable().optional();
 
@@ -24,6 +27,8 @@ export const AIExtractedPayloadSchema = z.object({
   event_time: z.string().nullable().optional(),
   reminder_time: z.string().nullable().optional(),
   timezone: z.string().default('Asia/Kolkata'),
+  time_type: TimeTypeSchema,
+  duration_seconds: z.number().nullable().optional(),
   recurrence: RecurrenceTypeSchema,
   target: TargetAudienceSchema,
   needs_clarification: z.boolean().default(false),

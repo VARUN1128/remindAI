@@ -53,6 +53,12 @@ export async function POST(req: NextRequest) {
 
     // 4. Action Execution
     switch (aiResult.intent) {
+      case 'GREETING': {
+        responseText = aiResult.conversational_response || 'Hi! 👋 What would you like me to remind you about?';
+        await ContextManager.clearContext(dbChat.id, dbUser.id);
+        break;
+      }
+
       case 'COMMAND': {
         responseText = aiResult.conversational_response || "👋 Hi! I'm Remindly.\n\nI turn natural-language messages into reliable reminders.\n\nTry:\n• Remind me tomorrow at 6 PM to submit my assignment\n• Remind me in 10 minutes to call Rahul\n• Remind me every Monday at 9 AM to submit my report\n\nYou can also use me in Telegram groups.";
         await ContextManager.clearContext(dbChat.id, dbUser.id);

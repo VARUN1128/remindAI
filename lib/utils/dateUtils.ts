@@ -1,10 +1,10 @@
-import { format, parseISO, addHours, addDays, isPast, isBefore } from 'date-fns';
-import { toZonedTime, formatInTimeZone } from 'date-fns-tz';
+import { format, parseISO, addDays, isPast } from 'date-fns';
+import { toZonedTime, fromZonedTime, formatInTimeZone } from 'date-fns-tz';
 
 export const DEFAULT_TIMEZONE = process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata';
 
 /**
- * Format ISO timestamp string into human-readable local time
+ * Format ISO timestamp string into human-readable local time in user's configured timezone
  */
 export function formatLocalDateTime(
   isoString: string,
@@ -40,42 +40,105 @@ export function getCurrentISOString(timeZone: string = DEFAULT_TIMEZONE): string
 }
 
 /**
- * Parse relative natural time expressions into ISO string
- * Handles terms like "tomorrow at 6 PM", "in 3 hours", "within 2mins", "after 2 minutes"
+ * Convert local wall-clock hour/minute into unambiguous absolute ISO timestamp in target timezone
+ */
+export function parseAbsoluteLocalTime(
+  hour: number,
+  minute: number,
+  timeZone: string = DEFAULT_TIMEZONE,
+  referenceInstant: Date = new Date(),
+  dayOffset: number = 0
+): string {
+  // 1. Get local wall-clock components of referenceInstant in user's timezone
+  const zonedNow = toZonedTime(referenceInstant, timeZone);
+
+  // 2. Set target wall-clock hours & minutes
+  const localTarget = new Date(zonedNow);
+  localTarget.setHours(hour, minute, 0, 0);
+
+  // 3. Handle day offset
+  if (dayOffset > 0) {
+    const shifted = addDays(localTarget, dayOffset);
+    localTarget.setTime(shifted.getTime());
+  } else if (dayOffset === 0 && localTarget.getTime() <= zonedNow.getTime()) {
+    // If target clock time has already passed today in user's timezone, target tomorrow
+    const shifted = addDays(localTarget, 1);
+    localTarget.setTime(shifted.getTime());
+  }
+
+  // 4. Convert local wall-clock target back to true UTC instant
+  const utcInstant = fromZonedTime(localTarget, timeZone);
+
+  // 5. Format ISO string with timezone offset
+  return formatInTimeZone(utcInstant, timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+/**
+ * Dynamically extract relative duration in seconds from natural text
+ */
+export function extractRelativeDuration(text: string): number | null {
+  const lower = text.toLowerCase().trim();
+
+  // 1. Match seconds: "in 30 seconds", "within 30 secs", "after 10s"
+  const secsMatch = lower.match(/(?:in|within|after)?\s*(\d+)\s*(?:second|sec|s)s?\b/i);
+  if (secsMatch) {
+    return parseInt(secsMatch[1], 10);
+  }
+
+  // 2. Match minutes: "within 2mins", "within 2 minutes", "in 2 minutes", "in 2 mins", "after 2 minutes"
+  const minsMatch = lower.match(/(?:in|within|after)?\s*(\d+)\s*(?:minute|min|m)s?\b/i);
+  if (minsMatch) {
+    return parseInt(minsMatch[1], 10) * 60;
+  }
+
+  // 3. Match hours: "within 1 hour", "in 3 hours", "after 2 hrs"
+  const hoursMatch = lower.match(/(?:in|within|after)?\s*(\d+)\s*(?:hour|hr|h)s?\b/i);
+  if (hoursMatch) {
+    return parseInt(hoursMatch[1], 10) * 3600;
+  }
+
+  // 4. Match days: "in 2 days", "after 3 days"
+  const daysMatch = lower.match(/(?:in|within|after)?\s*(\d+)\s*(?:day|d)s?\b/i);
+  if (daysMatch) {
+    return parseInt(daysMatch[1], 10) * 86400;
+  }
+
+  return null;
+}
+
+/**
+ * Calculate absolute instant from current instant + relative duration seconds
+ */
+export function calculateRelativeInstant(
+  durationSeconds: number,
+  referenceInstant: Date = new Date(),
+  timeZone: string = DEFAULT_TIMEZONE
+): string {
+  const targetInstant = new Date(referenceInstant.getTime() + durationSeconds * 1000);
+  return formatInTimeZone(targetInstant, timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+/**
+ * Parse relative natural time expressions into structured timing info or ISO string
  */
 export function parseRelativeDateText(
   text: string,
   timeZone: string = DEFAULT_TIMEZONE,
   referenceDate: Date = new Date()
-): string | null {
+): { time_type: 'relative' | 'absolute'; duration_seconds?: number; reminder_time?: string } | null {
   const lower = text.toLowerCase().trim();
-  const zonedNow = toZonedTime(referenceDate, timeZone);
 
-  // 1. Match relative seconds: "in 30 seconds", "within 30 secs", "after 10s"
-  const inSecsMatch = lower.match(/(?:in|within|after)?\s*(\d+)\s*(?:second|sec)s?\b/i);
-  if (inSecsMatch) {
-    const secs = parseInt(inSecsMatch[1], 10);
-    const target = new Date(zonedNow.getTime() + secs * 1000);
-    return formatInTimeZone(target, timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
+  // Check for dynamic relative duration
+  const durationSecs = extractRelativeDuration(lower);
+  if (durationSecs !== null) {
+    return {
+      time_type: 'relative',
+      duration_seconds: durationSecs,
+      reminder_time: calculateRelativeInstant(durationSecs, referenceDate, timeZone),
+    };
   }
 
-  // 2. Match relative minutes: "within 2mins", "within 2 minutes", "in 2 minutes", "in 2 mins", "after 2 minutes"
-  const inMinsMatch = lower.match(/(?:in|within|after)?\s*(\d+)\s*(?:minute|min|m)s?\b/i);
-  if (inMinsMatch) {
-    const mins = parseInt(inMinsMatch[1], 10);
-    const target = new Date(zonedNow.getTime() + mins * 60 * 1000);
-    return formatInTimeZone(target, timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
-  }
-
-  // 3. Match relative hours: "within 1 hour", "in 3 hours", "after 2 hrs"
-  const inHoursMatch = lower.match(/(?:in|within|after)?\s*(\d+)\s*(?:hour|hr|h)s?\b/i);
-  if (inHoursMatch) {
-    const hours = parseInt(inHoursMatch[1], 10);
-    const target = addHours(zonedNow, hours);
-    return formatInTimeZone(target, timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
-  }
-
-  // 4. Match "tomorrow at 2 AM" or "tomorrow at 6 PM" or "tomorrow"
+  // Check for "tomorrow" expressions
   if (lower.includes('tomorrow')) {
     let hour = 9; // Default 9 AM if no time specified
     let min = 0;
@@ -91,9 +154,47 @@ export function parseRelativeDateText(
       min = m;
     }
 
-    const tomorrow = addDays(zonedNow, 1);
-    tomorrow.setHours(hour, min, 0, 0);
-    return formatInTimeZone(tomorrow, timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
+    const iso = parseAbsoluteLocalTime(hour, min, timeZone, referenceDate, 1);
+    return {
+      time_type: 'absolute',
+      reminder_time: iso,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Parse absolute clock time expressions ("at 3 AM", "2:00 PM") in user's configured timezone
+ */
+export function parseTimeInput(
+  input: string,
+  referenceDate: Date = new Date(),
+  timeZone: string = DEFAULT_TIMEZONE
+): { time_type: 'absolute' | 'relative'; duration_seconds?: number | null; reminder_time: string } | null {
+  const lower = input.toLowerCase().trim();
+
+  // If input is a relative duration phrase (min, sec, hr), ignore absolute clock parsing
+  if (lower.match(/\b(?:min|minute|sec|second|hr|hour)s?\b/i)) {
+    return null;
+  }
+
+  // Match absolute time like "at 2 AM", "2:00 AM", "7 PM", "2 AM"
+  const timeMatch = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(pm|am)\b/i) || lower.match(/\b(\d{1,2}):(\d{2})\b/);
+
+  if (timeMatch) {
+    let hour = parseInt(timeMatch[1], 10);
+    const min = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+    const meridiem = timeMatch[3]?.toLowerCase();
+
+    if (meridiem === 'pm' && hour < 12) hour += 12;
+    if (meridiem === 'am' && hour === 12) hour = 0;
+
+    const iso = parseAbsoluteLocalTime(hour, min, timeZone, referenceDate, 0);
+    return {
+      time_type: 'absolute',
+      reminder_time: iso,
+    };
   }
 
   return null;

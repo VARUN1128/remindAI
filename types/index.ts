@@ -19,8 +19,11 @@ export type AIIntent =
   | 'LIST_REMINDERS'
   | 'CLARIFY'
   | 'OUT_OF_SCOPE'
+  | 'GREETING'
   | 'ACKNOWLEDGEMENT'
   | 'COMMAND';
+
+export type TimeType = 'absolute' | 'relative' | 'recurring';
 
 export type TargetAudience = 'PRIVATE_CHAT' | 'GROUP';
 
@@ -109,6 +112,8 @@ export interface AIExtractedPayload {
   event_time?: string | null; // ISO 8601 string or null
   reminder_time?: string | null; // ISO 8601 string or null
   timezone: string;
+  time_type?: TimeType | null;
+  duration_seconds?: number | null;
   recurrence?: RecurrenceType | null;
   target?: TargetAudience | null;
   needs_clarification: boolean;

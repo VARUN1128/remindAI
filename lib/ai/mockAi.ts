@@ -1,7 +1,13 @@
 import { AIExtractedPayload } from '@/types';
-import { parseRelativeDateText, getCurrentISOString } from '@/lib/utils/dateUtils';
-import { addHours, addDays, setHours, setMinutes } from 'date-fns';
-import { formatInTimeZone } from 'date-fns-tz';
+import {
+  parseRelativeDateText,
+  parseTimeInput,
+  parseAbsoluteLocalTime,
+  calculateRelativeInstant,
+  getCurrentISOString,
+  DEFAULT_TIMEZONE,
+} from '@/lib/utils/dateUtils';
+import { toZonedTime } from 'date-fns-tz';
 
 /**
  * Deterministic Mock AI Parser for DEMO_MODE execution and fallback
@@ -9,7 +15,7 @@ import { formatInTimeZone } from 'date-fns-tz';
 export function mockParseUserMessage(
   userText: string,
   chatType: 'private' | 'group' | 'supergroup',
-  timezone: string = 'Asia/Kolkata',
+  timezone: string = DEFAULT_TIMEZONE,
   pendingContext?: any
 ): AIExtractedPayload {
   const text = userText.trim();
@@ -26,7 +32,8 @@ export function mockParseUserMessage(
         timezone,
         needs_clarification: false,
         clarification_question: null,
-        conversational_response: "👋 Hi! I'm Remindly.\n\nI turn natural-language messages into reliable reminders.\n\nTry:\n• Remind me tomorrow at 6 PM to submit my assignment\n• Remind me in 10 minutes to call Rahul\n• Remind me every Monday at 9 AM to submit my report\n\nYou can also use me in Telegram groups.",
+        conversational_response:
+          "👋 Hi! I'm Remindly.\n\nI turn natural-language messages into reliable reminders.\n\nTry:\n• Remind me tomorrow at 6 PM to submit my assignment\n• Remind me in 10 minutes to call Rahul\n• Remind me every Monday at 9 AM to submit my report\n\nYou can also use me in Telegram groups.",
       };
     }
     if (cmd === '/cancel') {
@@ -36,18 +43,57 @@ export function mockParseUserMessage(
         timezone,
         needs_clarification: false,
         clarification_question: null,
-        conversational_response: "Action cancelled. Let me know if you need anything else! 😊",
+        conversational_response: 'Action cancelled. Let me know if you need anything else! 😊',
       };
     }
   }
 
-  // 2. Conversational Acknowledgements ("thanks", "thank you", "okay", "ok", "great", "done")
-  const cleanedAck = lower.replace(/[^\w\s]/g, '').trim();
-  const ackPhrases = ['thanks', 'thank you', 'thankyou', 'thx', 'okay', 'ok', 'great', 'perfect', 'got it', 'done', 'cool', 'awesome', 'alright'];
-  if (ackPhrases.includes(cleanedAck)) {
+  const cleanedMsg = lower.replace(/[^\w\s]/g, '').trim();
+
+  // 2. Greetings ("hi", "hello", "hey", "good morning", etc.)
+  const greetingPhrases = [
+    'hi',
+    'hello',
+    'hey',
+    'hey there',
+    'good morning',
+    'good afternoon',
+    'good evening',
+    'yo',
+    'hi there',
+    'greetings',
+  ];
+  if (greetingPhrases.includes(cleanedMsg)) {
+    return {
+      intent: 'GREETING',
+      title: cleanedMsg,
+      timezone,
+      needs_clarification: false,
+      clarification_question: null,
+      conversational_response: 'Hi! 👋 What would you like me to remind you about?',
+    };
+  }
+
+  // 3. Conversational Acknowledgements ("thanks", "thank you", "okay", "ok", "great", "done")
+  const ackPhrases = [
+    'thanks',
+    'thank you',
+    'thankyou',
+    'thx',
+    'okay',
+    'ok',
+    'great',
+    'perfect',
+    'got it',
+    'done',
+    'cool',
+    'awesome',
+    'alright',
+  ];
+  if (ackPhrases.includes(cleanedMsg)) {
     return {
       intent: 'ACKNOWLEDGEMENT',
-      title: cleanedAck,
+      title: cleanedMsg,
       timezone,
       needs_clarification: false,
       clarification_question: null,
@@ -55,15 +101,19 @@ export function mockParseUserMessage(
     };
   }
 
-  // 3. Handle multi-turn clarification answer if context exists
+  // 4. Handle multi-turn clarification answer if pending context exists
   if (pendingContext && pendingContext.context_type === 'AWAITING_TIME') {
-    const parsedTime = parseRelativeDateText(text, timezone, now) || parseTimeInput(text, now, timezone);
-    if (parsedTime) {
+    const parsedTimeObj =
+      parseRelativeDateText(text, timezone, now) || parseTimeInput(text, now, timezone);
+
+    if (parsedTimeObj && parsedTimeObj.reminder_time) {
       return {
         intent: 'CREATE_REMINDER',
         title: pendingContext.context_data.title || 'Reminder',
-        event_time: pendingContext.context_data.event_time || parsedTime,
-        reminder_time: parsedTime,
+        event_time: pendingContext.context_data.event_time || parsedTimeObj.reminder_time,
+        reminder_time: parsedTimeObj.reminder_time,
+        time_type: parsedTimeObj.time_type,
+        duration_seconds: parsedTimeObj.duration_seconds || null,
         timezone,
         recurrence: 'none',
         target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
@@ -73,7 +123,7 @@ export function mockParseUserMessage(
     }
   }
 
-  // TEST 5 — OUT OF SCOPE
+  // OUT OF SCOPE
   if (
     lower.includes('python scraper') ||
     lower.includes('write code') ||
@@ -130,9 +180,11 @@ export function mockParseUserMessage(
     };
   }
 
-  // TEST 4 — MESSY / MISSING TIME CLARIFICATION
+  // MISSING TIME CLARIFICATION
   if (
-    (lower.includes('meeting friday evening') || lower === 'remind me about the meeting' || lower.includes('remind me about the assignment')) &&
+    (lower.includes('meeting friday evening') ||
+      lower === 'remind me about the meeting' ||
+      lower.includes('remind me about the assignment')) &&
     !lower.match(/\d{1,2}\s*(pm|am|:00)/i) &&
     !lower.match(/\b(in|within|after)\b/i)
   ) {
@@ -155,14 +207,15 @@ export function mockParseUserMessage(
   // RECURRING REMINDERS ("Every Monday at 9 AM")
   if (lower.includes('every monday') || lower.includes('every day') || lower.includes('every week')) {
     const titleMatch = text.match(/to\s+(.+)$/i) || text.match(/remind me\s+(.+?)\s+every/i);
-    const title = titleMatch ? titleMatch[1] : 'Recurring task';
+    const titleStr = titleMatch ? titleMatch[1] : 'Recurring task';
 
-    const nextMonday9AM = getNextWeekdayTime(1, 9, 0, timezone);
+    const nextMonday9AM = getNextWeekdayTime(1, 9, 0, timezone, now);
     return {
       intent: 'CREATE_REMINDER',
-      title: title.charAt(0).toUpperCase() + title.slice(1),
+      title: titleStr.charAt(0).toUpperCase() + titleStr.slice(1),
       event_time: null,
       reminder_time: nextMonday9AM,
+      time_type: 'recurring',
       timezone,
       recurrence: 'weekly',
       target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
@@ -173,14 +226,15 @@ export function mockParseUserMessage(
 
   // RELATIVE BEFORE EVENT ("Meeting Friday at 4 PM. Remind me 2 hours before.")
   if (lower.includes('2 hours before') || lower.includes('before')) {
-    const friday4PM = getNextWeekdayTime(5, 16, 0, timezone);
-    const friday2PM = getNextWeekdayTime(5, 14, 0, timezone);
+    const friday4PM = getNextWeekdayTime(5, 16, 0, timezone, now);
+    const friday2PM = getNextWeekdayTime(5, 14, 0, timezone, now);
 
     return {
       intent: 'CREATE_REMINDER',
       title: 'Meeting',
       event_time: friday4PM,
       reminder_time: friday2PM,
+      time_type: 'absolute',
       timezone,
       recurrence: 'none',
       target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
@@ -189,14 +243,16 @@ export function mockParseUserMessage(
     };
   }
 
-  // NORMAL TEST 1 ("Remind me tomorrow at 6 PM to submit my assignment")
+  // NORMAL REMINDER ("Remind me tomorrow at 6 PM to submit my assignment")
   if (lower.includes('tomorrow at 6') || (lower.includes('tomorrow') && lower.includes('6'))) {
-    const tomorrow6PM = parseRelativeDateText('tomorrow at 6 PM', timezone, now);
+    const tomorrow6PMObj = parseRelativeDateText('tomorrow at 6 PM', timezone, now);
+    const timeVal = tomorrow6PMObj?.reminder_time || getCurrentISOString(timezone);
     return {
       intent: 'CREATE_REMINDER',
       title: 'Submit assignment',
-      event_time: tomorrow6PM,
-      reminder_time: tomorrow6PM,
+      event_time: timeVal,
+      reminder_time: timeVal,
+      time_type: 'absolute',
       timezone,
       recurrence: 'none',
       target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
@@ -207,14 +263,15 @@ export function mockParseUserMessage(
 
   // GROUP REMINDER ("Guys, presentation Friday at 10 AM. Remind everyone Thursday evening")
   if (lower.includes('presentation friday') || lower.includes('remind everyone')) {
-    const thursday7PM = getNextWeekdayTime(4, 19, 0, timezone);
-    const friday10AM = getNextWeekdayTime(5, 10, 0, timezone);
+    const thursday7PM = getNextWeekdayTime(4, 19, 0, timezone, now);
+    const friday10AM = getNextWeekdayTime(5, 10, 0, timezone, now);
 
     return {
       intent: 'CREATE_REMINDER',
       title: 'Project Presentation',
       event_time: friday10AM,
       reminder_time: thursday7PM,
+      time_type: 'absolute',
       timezone,
       recurrence: 'none',
       target: 'GROUP',
@@ -224,13 +281,14 @@ export function mockParseUserMessage(
   }
 
   // Generic relative or absolute date parsing fallback
-  const parsedTime = parseRelativeDateText(text, timezone, now) || parseTimeInput(text, now, timezone);
-  const title = extractTitle(text);
+  const parsedTimeObj =
+    parseRelativeDateText(text, timezone, now) || parseTimeInput(text, now, timezone);
+  const titleStr = extractTitle(text);
 
-  if (!parsedTime && !lower.includes('list')) {
+  if (!parsedTimeObj && !lower.includes('list')) {
     return {
       intent: 'CLARIFY',
-      title: title || 'Task',
+      title: titleStr || 'Task',
       timezone,
       needs_clarification: true,
       clarification_question: 'When would you like me to set this reminder for?',
@@ -238,11 +296,15 @@ export function mockParseUserMessage(
     };
   }
 
+  const finalTime = parsedTimeObj?.reminder_time || getCurrentISOString(timezone);
+
   return {
     intent: 'CREATE_REMINDER',
-    title: title || 'Reminder',
-    event_time: parsedTime,
-    reminder_time: parsedTime || getCurrentISOString(timezone),
+    title: titleStr || 'Reminder',
+    event_time: finalTime,
+    reminder_time: finalTime,
+    time_type: parsedTimeObj?.time_type || 'absolute',
+    duration_seconds: parsedTimeObj?.duration_seconds || null,
     timezone,
     recurrence: 'none',
     target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
@@ -251,45 +313,19 @@ export function mockParseUserMessage(
   };
 }
 
-function parseTimeInput(input: string, referenceDate: Date, timeZone: string): string | null {
-  const lower = input.toLowerCase().trim();
-
-  // If input is a duration phrase (min, sec, hr), return null (handled by parseRelativeDateText)
-  if (lower.match(/\b(?:min|minute|sec|second|hr|hour)s?\b/i)) {
-    return null;
-  }
-
-  // Match absolute time like "at 2 AM", "2:00 AM", "7 PM", "2 AM"
-  const timeMatch = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(pm|am)\b/i) || lower.match(/\b(\d{1,2}):(\d{2})\b/);
-
-  if (timeMatch) {
-    let hour = parseInt(timeMatch[1], 10);
-    const min = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-    const meridiem = timeMatch[3]?.toLowerCase();
-
-    if (meridiem === 'pm' && hour < 12) hour += 12;
-    if (meridiem === 'am' && hour === 12) hour = 0;
-
-    const targetDate = new Date(referenceDate);
-    targetDate.setHours(hour, min, 0, 0);
-
-    if (targetDate <= referenceDate) {
-      targetDate.setDate(targetDate.getDate() + 1);
-    }
-    return formatInTimeZone(targetDate, timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
-  }
-  return null;
-}
-
-function getNextWeekdayTime(targetDayOfWeek: number, hour: number, min: number, timeZone: string): string {
-  const now = new Date();
-  const currentDay = now.getDay();
+function getNextWeekdayTime(
+  targetDayOfWeek: number,
+  hour: number,
+  min: number,
+  timeZone: string,
+  referenceInstant: Date = new Date()
+): string {
+  const zonedNow = toZonedTime(referenceInstant, timeZone);
+  const currentDay = zonedNow.getDay();
   let daysToAdd = (targetDayOfWeek - currentDay + 7) % 7;
   if (daysToAdd === 0) daysToAdd = 7;
 
-  const target = addDays(now, daysToAdd);
-  target.setHours(hour, min, 0, 0);
-  return formatInTimeZone(target, timeZone, "yyyy-MM-dd'T'HH:mm:ssXXX");
+  return parseAbsoluteLocalTime(hour, min, timeZone, referenceInstant, daysToAdd);
 }
 
 function extractTitle(text: string): string {
@@ -303,7 +339,9 @@ function extractTitle(text: string): string {
     .replace(/^don't let me forget to\s+/i, '')
     .replace(/^to\s+/i, '');
 
-  const atPos = cleaned.search(/\s+(at|tomorrow|friday|monday|tuesday|wednesday|thursday|saturday|sunday|on|in|within|after)\s+/i);
+  const atPos = cleaned.search(
+    /\s+(at|tomorrow|friday|monday|tuesday|wednesday|thursday|saturday|sunday|on|in|within|after)\s+/i
+  );
   if (atPos > 0) {
     cleaned = cleaned.substring(0, atPos);
   }
