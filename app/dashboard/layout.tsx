@@ -37,9 +37,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const navItems = [
     { label: 'OVERVIEW', href: '/dashboard', icon: LayoutDashboard },
     { label: 'REMINDERS', href: '/dashboard/reminders', icon: Calendar },
-    { label: 'CONNECTED CHATS', href: '/dashboard/chats', icon: MessageSquare },
-    { label: 'TELEGRAM USERS', href: '/dashboard/users', icon: Users },
-    { label: 'SETTINGS & KEYS', href: '/settings', icon: Settings },
+    { label: 'USERS', href: '/dashboard/users', icon: Users },
+    { label: 'CHATS / GROUPS', href: '/dashboard/chats', icon: MessageSquare },
+    { label: 'ACTIVITY', href: '/dashboard/activity', icon: Bot },
+    { label: 'SETTINGS', href: '/settings', icon: Settings },
   ];
 
   return (

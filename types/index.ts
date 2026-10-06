@@ -182,3 +182,73 @@ export interface SystemHealth {
   geminiConfigured: boolean;
   timestamp: string;
 }
+
+// Owner Analytics Data Structures
+export interface OwnerAnalyticsOverview {
+  totalUsers: number;
+  activeUsers: number;
+  totalChats: number;
+  totalReminders: number;
+  scheduledReminders: number;
+  sentReminders: number;
+  failedReminders: number;
+  cancelledReminders: number;
+  groupChats: number;
+  privateChats: number;
+  privateReminders: number;
+  groupReminders: number;
+  deliverySuccessRate: number;
+}
+
+export interface UserGrowthPoint {
+  date: string;
+  count: number;
+}
+
+export interface ReminderActivityPoint {
+  date: string;
+  created: number;
+  sent: number;
+  failed: number;
+  cancelled: number;
+}
+
+export interface TopUserSummary {
+  user: User;
+  totalReminders: number;
+  sentReminders: number;
+  lastActive: string;
+}
+
+export interface TopGroupSummary {
+  chat: Chat;
+  totalReminders: number;
+  sentReminders: number;
+  lastActive: string;
+}
+
+export interface ActivityEvent {
+  id: string;
+  type: 'REMINDER_CREATED' | 'REMINDER_SENT' | 'REMINDER_FAILED' | 'REMINDER_CANCELLED' | 'NEW_USER' | 'NEW_GROUP';
+  user_name?: string | null;
+  chat_title?: string | null;
+  reminder_title?: string | null;
+  timestamp: string;
+  status?: string | null;
+  details?: string | null;
+}
+
+export interface IntentMetric {
+  intent: AIIntent;
+  count: number;
+}
+
+export interface SystemReliabilityMetrics {
+  totalAttempted: number;
+  totalSent: number;
+  totalFailed: number;
+  pendingScheduled: number;
+  successRate: number;
+  schedulerStatus: 'ACTIVE' | 'IDLE';
+  recentFailures: ReminderLog[];
+}

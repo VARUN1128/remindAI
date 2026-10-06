@@ -1,10 +1,6 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '@/lib/auth/AuthContext';
-import { DbRepository } from '@/lib/database/repository';
-import { Reminder, ReminderLog, Chat, User } from '@/types';
-import { formatLocalDateTime } from '@/lib/utils/dateUtils';
 import {
   Users,
   MessageSquare,
@@ -13,138 +9,143 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
-  Play,
-  RotateCcw,
+  TrendingUp,
+  Activity,
+  ShieldCheck,
+  RefreshCw,
   Zap,
-  User as UserIcon,
+  BarChart2,
+  PieChart,
+  UserCheck,
 } from 'lucide-react';
+import { formatLocalDateTime } from '@/lib/utils/dateUtils';
 
 export default function DashboardOverviewPage() {
-  const { user } = useAuth();
-  const [users, setUsers] = useState<User[]>([]);
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [logs, setLogs] = useState<ReminderLog[]>([]);
-  const [viewScope, setViewScope] = useState<'my' | 'all'>('my');
+  const [data, setData] = useState<any>(null);
+  const [growthPeriod, setGrowthPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [triggerResult, setTriggerResult] = useState<string | null>(null);
 
-  const loadDashboardData = async () => {
+  const fetchDashboardData = async () => {
     try {
-      const u = await DbRepository.getUsers();
-      const c = await DbRepository.getChats();
-      const l = await DbRepository.getLogs();
-
-      let r: Reminder[];
-      if (user && viewScope === 'my') {
-        r = await DbRepository.getRemindersByUser(user.id);
-      } else {
-        r = await DbRepository.getReminders();
+      setRefreshing(true);
+      const res = await fetch(`/api/analytics?growthPeriod=${growthPeriod}`);
+      const json = await res.json();
+      if (json.ok) {
+        setData(json);
       }
-
-      setUsers(u);
-      setChats(c);
-      setReminders(r);
-      setLogs(l);
-    } catch (e) {
-      console.error('Failed to load dashboard data:', e);
+    } catch (err) {
+      console.error('Failed to fetch analytics data:', err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
-    loadDashboardData();
-  }, [user, viewScope]);
+    fetchDashboardData();
+  }, [growthPeriod]);
 
-  const handleTriggerCron = async () => {
+  const handleRunScheduler = async () => {
     setTriggering(true);
     setTriggerResult(null);
     try {
       const res = await fetch('/api/demo/trigger-reminder', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
+      const json = await res.json();
+      if (json.success) {
         setTriggerResult(
-          `Processed ${data.result.processed} due instances (${data.result.success} delivered, ${data.result.failed} failed)`
+          `Processed ${json.result.processed} due instances (${json.result.success} sent, ${json.result.failed} failed)`
         );
-        loadDashboardData();
+        fetchDashboardData();
       } else {
-        setTriggerResult(`Error: ${data.error}`);
+        setTriggerResult(`Error: ${json.error}`);
       }
-    } catch (err: any) {
-      setTriggerResult('Failed to execute trigger');
+    } catch (e) {
+      setTriggerResult('Failed to execute scheduler');
     } finally {
       setTriggering(false);
     }
   };
 
-  const handleReSeed = async () => {
-    await fetch('/api/demo/trigger-reminder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'seed' }),
-    });
-    loadDashboardData();
+  if (loading) {
+    return (
+      <div className="p-8 font-mono text-xs font-bold text-[#0A0A0A] uppercase tracking-wider flex items-center gap-3">
+        <RefreshCw size={16} className="animate-spin text-[#EF4444]" /> LOADING REMINDLY OWNER ANALYTICS...
+      </div>
+    );
+  }
+
+  const overview = data?.overview || {
+    totalUsers: 0,
+    activeUsers: 0,
+    totalChats: 0,
+    totalReminders: 0,
+    scheduledReminders: 0,
+    sentReminders: 0,
+    failedReminders: 0,
+    cancelledReminders: 0,
+    groupChats: 0,
+    privateChats: 0,
+    privateReminders: 0,
+    groupReminders: 0,
+    deliverySuccessRate: 100,
   };
 
-  const scheduledCount = reminders.filter((r) => r.status === 'scheduled').length;
-  const sentCount = reminders.filter((r) => r.status === 'sent').length;
-  const cancelledCount = reminders.filter((r) => r.status === 'cancelled').length;
-  const failedCount = reminders.filter((r) => r.status === 'failed').length;
+  const userGrowth = data?.userGrowth || [];
+  const reminderActivity = data?.reminderActivity || [];
+  const topUsers = data?.topUsers || [];
+  const topGroups = data?.topGroups || [];
+  const recentActivity = data?.recentActivity || [];
+  const reliability = data?.reliability || {
+    totalAttempted: 0,
+    totalSent: 0,
+    totalFailed: 0,
+    pendingScheduled: 0,
+    successRate: 100,
+    schedulerStatus: 'ACTIVE',
+    recentFailures: [],
+  };
+
+  const totalR = overview.totalReminders || 1; // Prevent division by zero
+  const pctScheduled = Math.round(((overview.scheduledReminders || 0) / totalR) * 100);
+  const pctSent = Math.round(((overview.sentReminders || 0) / totalR) * 100);
+  const pctCancelled = Math.round(((overview.cancelledReminders || 0) / totalR) * 100);
+  const pctFailed = Math.round(((overview.failedReminders || 0) / totalR) * 100);
 
   return (
     <div className="space-y-8 font-body">
-      {/* VoiceBox Top Header Banner */}
+      {/* Owner Header */}
       <div className="bg-[#0A0A0A] text-[#FAFAFA] p-6 border-4 border-[#0A0A0A] flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <span className="font-mono text-xs font-bold text-[#EF4444] uppercase tracking-widest block mb-1">
-            {user ? `WELCOME BACK // ${user.display_name.toUpperCase()}` : 'EDITORIAL MONITOR // VOICEBOX SPEC'}
+            REMINDLY OWNER ANALYTICS
           </span>
-          <h1 className="font-display text-3xl uppercase text-[#FAFAFA] tracking-tight">
-            {viewScope === 'my' && user ? 'MY PERSONAL DASHBOARD' : 'SYSTEM OVERVIEW & AUDIT'}
+          <h1 className="font-display text-3xl md:text-4xl uppercase text-[#FAFAFA] tracking-tight">
+            PRODUCT & USAGE DASHBOARD
           </h1>
           <p className="font-body text-sm text-[#A3A3A3] mt-1">
-            Real-time metric monitoring, commitment tracking, and scheduler engine execution logs.
+            Understand adoption, usage, reminders, and reliability in real time.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          {user && (
-            <div className="flex items-center bg-[#171717] p-1 border-2 border-[#333333]">
-              <button
-                onClick={() => setViewScope('my')}
-                className={`px-3 py-1 text-xs font-mono font-bold uppercase transition-all ${
-                  viewScope === 'my'
-                    ? 'bg-[#EF4444] text-[#FAFAFA]'
-                    : 'text-[#A3A3A3] hover:text-[#FAFAFA]'
-                }`}
-              >
-                MY REMINDERS
-              </button>
-              <button
-                onClick={() => setViewScope('all')}
-                className={`px-3 py-1 text-xs font-mono font-bold uppercase transition-all ${
-                  viewScope === 'all'
-                    ? 'bg-[#EF4444] text-[#FAFAFA]'
-                    : 'text-[#A3A3A3] hover:text-[#FAFAFA]'
-                }`}
-              >
-                ALL SYSTEM
-              </button>
-            </div>
-          )}
-
           <button
-            onClick={handleTriggerCron}
-            disabled={triggering}
-            className="vb-btn-primary bg-[#EF4444] border-[#EF4444] hover:bg-[#DC2626] hover:border-[#DC2626]"
+            onClick={fetchDashboardData}
+            disabled={refreshing}
+            className="vb-btn-secondary text-xs py-2 px-4 flex items-center gap-2 border-[#FAFAFA] text-[#FAFAFA] hover:bg-[#FAFAFA] hover:text-[#0A0A0A]"
           >
-            <Play size={14} className={triggering ? 'animate-spin' : ''} />
-            {triggering ? 'EXECUTING CRON...' : 'RUN SCHEDULER'}
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? 'REFRESHING...' : 'REFRESH DATA'}
           </button>
-          <button onClick={handleReSeed} className="vb-btn-secondary text-[#FAFAFA] border-[#FAFAFA] hover:bg-[#FAFAFA] hover:text-[#0A0A0A]">
-            <RotateCcw size={14} /> SEED DEMO DATA
+          <button
+            onClick={handleRunScheduler}
+            disabled={triggering}
+            className="vb-btn-primary bg-[#EF4444] border-[#EF4444] text-xs py-2 px-4 flex items-center gap-2 hover:bg-[#DC2626]"
+          >
+            <Zap size={14} className={triggering ? 'animate-spin' : ''} />
+            {triggering ? 'EXECUTING...' : 'TEST SCHEDULER'}
           </button>
         </div>
       </div>
@@ -155,173 +156,395 @@ export default function DashboardOverviewPage() {
         </div>
       )}
 
-      {/* Metrics Cards Grid - VoiceBox Elevated Style */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        <div className="vb-card-elevated p-4">
-          <div className="flex items-center justify-between text-[#525252] mb-2 font-mono text-xs font-bold uppercase">
-            <span>USERS</span>
-            <Users size={16} className="text-[#0A0A0A]" />
+      {/* TOP 8 KPI CARDS */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+        <div className="bg-[#FAFAFA] border-2 border-[#0A0A0A] p-4 text-left">
+          <div className="font-mono text-[10px] font-bold text-[#525252] uppercase tracking-wider flex items-center justify-between mb-1">
+            <span>TOTAL USERS</span>
+            <Users size={14} className="text-[#0A0A0A]" />
           </div>
-          <div className="font-display text-3xl text-[#0A0A0A]">{users.length}</div>
+          <div className="font-display text-3xl font-bold text-[#0A0A0A]">{overview.totalUsers}</div>
         </div>
 
-        <div className="vb-card-elevated p-4">
-          <div className="flex items-center justify-between text-[#525252] mb-2 font-mono text-xs font-bold uppercase">
-            <span>CHATS</span>
-            <MessageSquare size={16} className="text-[#0A0A0A]" />
+        <div className="bg-[#FAFAFA] border-2 border-[#0A0A0A] p-4 text-left">
+          <div className="font-mono text-[10px] font-bold text-[#525252] uppercase tracking-wider flex items-center justify-between mb-1">
+            <span>ACTIVE USERS</span>
+            <UserCheck size={14} className="text-[#16A34A]" />
           </div>
-          <div className="font-display text-3xl text-[#0A0A0A]">{chats.length}</div>
+          <div className="font-display text-3xl font-bold text-[#16A34A]">{overview.activeUsers}</div>
         </div>
 
-        <div className="vb-card-elevated p-4">
-          <div className="flex items-center justify-between text-[#525252] mb-2 font-mono text-xs font-bold uppercase">
-            <span>TOTAL</span>
-            <Bell size={16} className="text-[#0A0A0A]" />
+        <div className="bg-[#FAFAFA] border-2 border-[#0A0A0A] p-4 text-left">
+          <div className="font-mono text-[10px] font-bold text-[#525252] uppercase tracking-wider flex items-center justify-between mb-1">
+            <span>TOTAL CHATS</span>
+            <MessageSquare size={14} className="text-[#0A0A0A]" />
           </div>
-          <div className="font-display text-3xl text-[#0A0A0A]">{reminders.length}</div>
+          <div className="font-display text-3xl font-bold text-[#0A0A0A]">{overview.totalChats}</div>
         </div>
 
-        <div className="vb-card-elevated p-4">
-          <div className="flex items-center justify-between text-[#CA8A04] mb-2 font-mono text-xs font-bold uppercase">
+        <div className="bg-[#FAFAFA] border-2 border-[#0A0A0A] p-4 text-left">
+          <div className="font-mono text-[10px] font-bold text-[#525252] uppercase tracking-wider flex items-center justify-between mb-1">
+            <span>REMINDERS</span>
+            <Bell size={14} className="text-[#0A0A0A]" />
+          </div>
+          <div className="font-display text-3xl font-bold text-[#0A0A0A]">{overview.totalReminders}</div>
+        </div>
+
+        <div className="bg-[#FAFAFA] border-2 border-[#0A0A0A] p-4 text-left">
+          <div className="font-mono text-[10px] font-bold text-[#CA8A04] uppercase tracking-wider flex items-center justify-between mb-1">
             <span>SCHEDULED</span>
-            <Clock size={16} className="text-[#CA8A04]" />
+            <Clock size={14} className="text-[#CA8A04]" />
           </div>
-          <div className="font-display text-3xl text-[#CA8A04]">{scheduledCount}</div>
+          <div className="font-display text-3xl font-bold text-[#CA8A04]">{overview.scheduledReminders}</div>
         </div>
 
-        <div className="vb-card-elevated p-4">
-          <div className="flex items-center justify-between text-[#16A34A] mb-2 font-mono text-xs font-bold uppercase">
+        <div className="bg-[#FAFAFA] border-2 border-[#0A0A0A] p-4 text-left">
+          <div className="font-mono text-[10px] font-bold text-[#16A34A] uppercase tracking-wider flex items-center justify-between mb-1">
             <span>SENT</span>
-            <CheckCircle size={16} className="text-[#16A34A]" />
+            <CheckCircle size={14} className="text-[#16A34A]" />
           </div>
-          <div className="font-display text-3xl text-[#16A34A]">{sentCount}</div>
+          <div className="font-display text-3xl font-bold text-[#16A34A]">{overview.sentReminders}</div>
         </div>
 
-        <div className="vb-card-elevated p-4">
-          <div className="flex items-center justify-between text-[#525252] mb-2 font-mono text-xs font-bold uppercase">
-            <span>CANCELLED</span>
-            <XCircle size={16} className="text-[#525252]" />
-          </div>
-          <div className="font-display text-3xl text-[#525252]">{cancelledCount}</div>
-        </div>
-
-        <div className="vb-card-elevated p-4">
-          <div className="flex items-center justify-between text-[#EF4444] mb-2 font-mono text-xs font-bold uppercase">
+        <div className="bg-[#FAFAFA] border-2 border-[#0A0A0A] p-4 text-left">
+          <div className="font-mono text-[10px] font-bold text-[#EF4444] uppercase tracking-wider flex items-center justify-between mb-1">
             <span>FAILED</span>
-            <AlertCircle size={16} className="text-[#EF4444]" />
+            <AlertCircle size={14} className="text-[#EF4444]" />
           </div>
-          <div className="font-display text-3xl text-[#EF4444]">{failedCount}</div>
+          <div className="font-display text-3xl font-bold text-[#EF4444]">{overview.failedReminders}</div>
+        </div>
+
+        <div className="bg-[#FAFAFA] border-2 border-[#0A0A0A] p-4 text-left">
+          <div className="font-mono text-[10px] font-bold text-[#0A0A0A] uppercase tracking-wider flex items-center justify-between mb-1">
+            <span>GROUPS</span>
+            <Users size={14} className="text-[#EF4444]" />
+          </div>
+          <div className="font-display text-3xl font-bold text-[#0A0A0A]">{overview.groupChats}</div>
         </div>
       </div>
 
-      {/* Recent Reminders Table - VoiceBox Magazine Style */}
-      <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4">
-        <div className="border-b-2 border-[#0A0A0A] pb-3 flex items-center justify-between">
-          <div>
-            <span className="font-mono text-xs font-bold text-[#EF4444] uppercase tracking-widest block">
-              DATABASE SNAPSHOT
-            </span>
-            <h2 className="font-display text-2xl uppercase text-[#0A0A0A]">
-              {viewScope === 'my' && user ? `MY COMMITMENTS (${user.display_name})` : 'RECENT COMMITMENTS'}
+      {/* CHARTS GRID: User Growth & Reminder Volume */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* User Growth Chart */}
+        <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4">
+          <div className="flex items-center justify-between border-b-2 border-[#0A0A0A] pb-3">
+            <div>
+              <span className="font-mono text-[10px] font-bold text-[#EF4444] uppercase tracking-widest block">
+                ADOPTION METRICS
+              </span>
+              <h2 className="font-display text-xl uppercase text-[#0A0A0A] flex items-center gap-2">
+                <TrendingUp size={18} className="text-[#EF4444]" /> USER GROWTH OVER TIME
+              </h2>
+            </div>
+
+            <div className="flex items-center bg-[#E5E5E5] p-1 border-2 border-[#0A0A0A]">
+              {(['daily', 'weekly', 'monthly'] as const).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setGrowthPeriod(p)}
+                  className={`px-2.5 py-0.5 font-mono text-[10px] font-bold uppercase transition-all ${
+                    growthPeriod === p
+                      ? 'bg-[#0A0A0A] text-[#FAFAFA]'
+                      : 'text-[#525252] hover:text-[#0A0A0A]'
+                  }`}
+                >
+                  {p.charAt(0).toUpperCase() + p.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {userGrowth.length === 0 ? (
+            <div className="h-48 border-2 border-dashed border-[#D4D4D4] flex flex-col items-center justify-center font-mono text-xs text-[#737373] uppercase">
+              <Users size={24} className="mb-2 text-[#A3A3A3]" /> No user activity yet.
+            </div>
+          ) : (
+            <div className="space-y-2 pt-2">
+              {userGrowth.map((pt: any) => (
+                <div key={pt.date} className="flex items-center gap-3 font-mono text-xs">
+                  <span className="w-24 text-[#525252] font-bold">{pt.date}</span>
+                  <div className="flex-1 bg-[#E5E5E5] h-5 relative overflow-hidden border border-[#0A0A0A]">
+                    <div
+                      className="bg-[#EF4444] h-full"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          (pt.count / Math.max(...userGrowth.map((g: any) => g.count))) * 100
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <span className="w-8 font-bold text-right text-[#0A0A0A]">{pt.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Reminder Activity Volume */}
+        <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4">
+          <div className="flex items-center justify-between border-b-2 border-[#0A0A0A] pb-3">
+            <div>
+              <span className="font-mono text-[10px] font-bold text-[#EF4444] uppercase tracking-widest block">
+                USAGE METRICS
+              </span>
+              <h2 className="font-display text-xl uppercase text-[#0A0A0A] flex items-center gap-2">
+                <BarChart2 size={18} className="text-[#EF4444]" /> REMINDER VOLUME OVER TIME
+              </h2>
+            </div>
+          </div>
+
+          {reminderActivity.length === 0 ? (
+            <div className="h-48 border-2 border-dashed border-[#D4D4D4] flex flex-col items-center justify-center font-mono text-xs text-[#737373] uppercase">
+              <Bell size={24} className="mb-2 text-[#A3A3A3]" /> No reminder activity yet.
+            </div>
+          ) : (
+            <div className="space-y-3 pt-2">
+              {reminderActivity.map((pt: any) => (
+                <div key={pt.date} className="space-y-1 font-mono text-xs">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-[#0A0A0A]">
+                    <span>{pt.date}</span>
+                    <span>{pt.created} created ({pt.sent} sent, {pt.failed} failed)</span>
+                  </div>
+                  <div className="flex h-4 border border-[#0A0A0A] overflow-hidden bg-[#E5E5E5]">
+                    <div
+                      className="bg-[#16A34A] h-full"
+                      style={{ width: `${pt.created > 0 ? (pt.sent / pt.created) * 100 : 0}%` }}
+                      title={`Sent: ${pt.sent}`}
+                    />
+                    <div
+                      className="bg-[#CA8A04] h-full"
+                      style={{
+                        width: `${
+                          pt.created > 0 ? ((pt.created - pt.sent - pt.failed - pt.cancelled) / pt.created) * 100 : 0
+                        }%`,
+                      }}
+                      title="Scheduled"
+                    />
+                    <div
+                      className="bg-[#EF4444] h-full"
+                      style={{ width: `${pt.created > 0 ? (pt.failed / pt.created) * 100 : 0}%` }}
+                      title={`Failed: ${pt.failed}`}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* REMINDER STATUS BREAKDOWN & PRIVATE VS GROUP USAGE */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Status Breakdown */}
+        <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4">
+          <div className="border-b-2 border-[#0A0A0A] pb-3 flex items-center justify-between">
+            <h2 className="font-display text-xl uppercase text-[#0A0A0A] flex items-center gap-2">
+              <PieChart size={18} className="text-[#EF4444]" /> REMINDER STATUS BREAKDOWN
+            </h2>
+            <span className="font-mono text-xs font-bold text-[#525252]">TOTAL: {overview.totalReminders}</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <div className="border-2 border-[#CA8A04] bg-[#FEFCE8] p-3 font-mono">
+              <div className="text-[10px] font-bold text-[#CA8A04] uppercase">SCHEDULED</div>
+              <div className="text-2xl font-bold text-[#0A0A0A] mt-1">{overview.scheduledReminders}</div>
+              <div className="text-[11px] text-[#525252]">{pctScheduled}% of total</div>
+            </div>
+
+            <div className="border-2 border-[#16A34A] bg-[#F0FDF4] p-3 font-mono">
+              <div className="text-[10px] font-bold text-[#16A34A] uppercase">DELIVERED / SENT</div>
+              <div className="text-2xl font-bold text-[#0A0A0A] mt-1">{overview.sentReminders}</div>
+              <div className="text-[11px] text-[#525252]">{pctSent}% of total</div>
+            </div>
+
+            <div className="border-2 border-[#525252] bg-[#F5F5F5] p-3 font-mono">
+              <div className="text-[10px] font-bold text-[#525252] uppercase">CANCELLED</div>
+              <div className="text-2xl font-bold text-[#0A0A0A] mt-1">{overview.cancelledReminders}</div>
+              <div className="text-[11px] text-[#525252]">{pctCancelled}% of total</div>
+            </div>
+
+            <div className="border-2 border-[#EF4444] bg-[#FEF2F2] p-3 font-mono">
+              <div className="text-[10px] font-bold text-[#EF4444] uppercase">FAILED</div>
+              <div className="text-2xl font-bold text-[#0A0A0A] mt-1">{overview.failedReminders}</div>
+              <div className="text-[11px] text-[#525252]">{pctFailed}% of total</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Private vs Group Usage */}
+        <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4">
+          <div className="border-b-2 border-[#0A0A0A] pb-3">
+            <h2 className="font-display text-xl uppercase text-[#0A0A0A] flex items-center gap-2">
+              <MessageSquare size={18} className="text-[#EF4444]" /> PRIVATE VS GROUP USAGE
             </h2>
           </div>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm border-2 border-[#0A0A0A]">
-            <thead className="bg-[#0A0A0A] text-[#FAFAFA] font-mono text-xs uppercase tracking-wider">
-              <tr>
-                <th className="p-3 border-r-2 border-[#333333]">Title</th>
-                <th className="p-3 border-r-2 border-[#333333]">Chat Target</th>
-                <th className="p-3 border-r-2 border-[#333333]">Created By</th>
-                <th className="p-3 border-r-2 border-[#333333]">Event Time</th>
-                <th className="p-3 border-r-2 border-[#333333]">Reminder Time</th>
-                <th className="p-3">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y-2 divide-[#0A0A0A]">
-              {reminders.slice(0, 10).map((r) => (
-                <tr key={r.id} className="hover:bg-[#F5F5F5] font-body">
-                  <td className="p-3 font-bold text-[#0A0A0A] border-r-2 border-[#E5E5E5]">{r.title}</td>
-                  <td className="p-3 text-[#525252] border-r-2 border-[#E5E5E5]">{r.chat?.chat_title || 'Chat'}</td>
-                  <td className="p-3 text-[#525252] border-r-2 border-[#E5E5E5]">{r.created_by?.display_name || 'User'}</td>
-                  <td className="p-3 font-mono text-xs text-[#525252] border-r-2 border-[#E5E5E5]">
-                    {r.event_time ? formatLocalDateTime(r.event_time, r.timezone, 'MMM d, h:mm a') : '—'}
-                  </td>
-                  <td className="p-3 font-mono text-xs font-bold text-[#0A0A0A] border-r-2 border-[#E5E5E5]">
-                    {formatLocalDateTime(r.reminder_time, r.timezone, 'MMM d, h:mm a')}
-                  </td>
-                  <td className="p-3">
-                    <span
-                      className={`font-mono text-[10px] font-bold px-2 py-0.5 border-2 uppercase ${
-                        r.status === 'scheduled'
-                          ? 'bg-[#FEFCE8] text-[#CA8A04] border-[#CA8A04]'
-                          : r.status === 'sent'
-                          ? 'bg-[#F0FDF4] text-[#16A34A] border-[#16A34A]'
-                          : r.status === 'cancelled'
-                          ? 'bg-[#F5F5F5] text-[#525252] border-[#525252]'
-                          : 'bg-[#FEF2F2] text-[#EF4444] border-[#EF4444]'
-                      }`}
-                    >
-                      {r.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {reminders.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="p-8 text-center font-mono text-xs text-[#525252] uppercase italic">
-                    No active commitments found for this view.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          <div className="grid grid-cols-2 gap-4 pt-2 font-mono">
+            <div className="border-2 border-[#0A0A0A] p-4 bg-[#FAFAFA]">
+              <div className="text-xs font-bold text-[#737373] uppercase">PRIVATE CHATS</div>
+              <div className="text-3xl font-bold text-[#0A0A0A] my-1">{overview.privateChats}</div>
+              <div className="text-xs text-[#525252]">
+                Reminders created: <span className="font-bold text-[#0A0A0A]">{overview.privateReminders}</span>
+              </div>
+            </div>
+
+            <div className="border-2 border-[#0A0A0A] p-4 bg-[#FAFAFA]">
+              <div className="text-xs font-bold text-[#EF4444] uppercase">GROUP CHATS</div>
+              <div className="text-3xl font-bold text-[#0A0A0A] my-1">{overview.groupChats}</div>
+              <div className="text-xs text-[#525252]">
+                Reminders created: <span className="font-bold text-[#0A0A0A]">{overview.groupReminders}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Delivery Audit Logs Feed */}
-      <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4">
-        <div className="border-b-2 border-[#0A0A0A] pb-3">
-          <span className="font-mono text-xs font-bold text-[#EF4444] uppercase tracking-widest block">
-            AUDIT LOGS
-          </span>
-          <h2 className="font-display text-2xl uppercase text-[#0A0A0A]">DELIVERY HISTORY</h2>
+      {/* TOP USERS & TOP GROUPS GRID */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Top Active Users */}
+        <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4">
+          <div className="border-b-2 border-[#0A0A0A] pb-3">
+            <h2 className="font-display text-xl uppercase text-[#0A0A0A] flex items-center gap-2">
+              <Users size={18} className="text-[#EF4444]" /> MOST ACTIVE USERS
+            </h2>
+          </div>
+
+          {topUsers.length === 0 ? (
+            <div className="p-6 border-2 border-dashed border-[#D4D4D4] font-mono text-xs text-[#737373] uppercase text-center">
+              No users recorded yet.
+            </div>
+          ) : (
+            <div className="divide-y-2 border-2 border-[#0A0A0A]">
+              {topUsers.map((item: any) => (
+                <div key={item.user.id} className="p-3 flex items-center justify-between font-mono text-xs bg-[#FAFAFA] hover:bg-[#F5F5F5]">
+                  <div>
+                    <div className="font-bold text-[#0A0A0A]">{item.user.display_name}</div>
+                    <div className="text-[10px] text-[#737373]">
+                      @{item.user.telegram_username || 'no_username'} • Joined {formatLocalDateTime(item.user.created_at, 'Asia/Kolkata', 'MMM d')}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-bold text-[#EF4444]">{item.totalReminders} reminders</div>
+                    <div className="text-[10px] text-[#16A34A]">{item.sentReminders} delivered</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm border-2 border-[#0A0A0A]">
-            <thead className="bg-[#0A0A0A] text-[#FAFAFA] font-mono text-xs uppercase tracking-wider">
-              <tr>
-                <th className="p-3 border-r-2 border-[#333333]">Log ID</th>
-                <th className="p-3 border-r-2 border-[#333333]">Telegram Chat ID</th>
-                <th className="p-3 border-r-2 border-[#333333]">Sent Time</th>
-                <th className="p-3 border-r-2 border-[#333333]">Status</th>
-                <th className="p-3">Error Message</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y-2 divide-[#0A0A0A] font-mono text-xs">
-              {logs.map((log) => (
-                <tr key={log.id} className="hover:bg-[#F5F5F5]">
-                  <td className="p-3 text-[#525252] border-r-2 border-[#E5E5E5]">{log.id}</td>
-                  <td className="p-3 font-bold text-[#0A0A0A] border-r-2 border-[#E5E5E5]">{log.telegram_chat_id}</td>
-                  <td className="p-3 text-[#525252] border-r-2 border-[#E5E5E5]">{formatLocalDateTime(log.sent_at)}</td>
-                  <td className="p-3 border-r-2 border-[#E5E5E5]">
-                    <span
-                      className={`font-mono text-[10px] font-bold px-2 py-0.5 border-2 uppercase ${
-                        log.delivery_status === 'success'
-                          ? 'bg-[#F0FDF4] text-[#16A34A] border-[#16A34A]'
-                          : 'bg-[#FEF2F2] text-[#EF4444] border-[#EF4444]'
-                      }`}
-                    >
-                      {log.delivery_status}
-                    </span>
-                  </td>
-                  <td className="p-3 text-[#525252]">{log.error_message || 'None'}</td>
-                </tr>
+        {/* Top Active Groups */}
+        <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4">
+          <div className="border-b-2 border-[#0A0A0A] pb-3">
+            <h2 className="font-display text-xl uppercase text-[#0A0A0A] flex items-center gap-2">
+              <Users size={18} className="text-[#EF4444]" /> MOST ACTIVE GROUPS
+            </h2>
+          </div>
+
+          {topGroups.length === 0 ? (
+            <div className="p-6 border-2 border-dashed border-[#D4D4D4] font-mono text-xs text-[#737373] uppercase text-center">
+              No group chats connected yet.
+            </div>
+          ) : (
+            <div className="divide-y-2 border-2 border-[#0A0A0A]">
+              {topGroups.map((item: any) => (
+                <div key={item.chat.id} className="p-3 flex items-center justify-between font-mono text-xs bg-[#FAFAFA] hover:bg-[#F5F5F5]">
+                  <div>
+                    <div className="font-bold text-[#0A0A0A]">{item.chat.chat_title}</div>
+                    <div className="text-[10px] text-[#737373]">ID: {item.chat.telegram_chat_id}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-bold text-[#EF4444]">{item.totalReminders} reminders</div>
+                    <div className="text-[10px] text-[#16A34A]">{item.sentReminders} delivered</div>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* SYSTEM RELIABILITY & RECENT ACTIVITY */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Reliability Card */}
+        <div className="bg-[#0A0A0A] text-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4 lg:col-span-1">
+          <div className="border-b-2 border-[#333333] pb-3">
+            <span className="font-mono text-[10px] font-bold text-[#EF4444] uppercase tracking-widest block">
+              DIAGNOSTICS & SLA
+            </span>
+            <h2 className="font-display text-2xl uppercase text-[#FAFAFA] flex items-center gap-2">
+              <ShieldCheck size={20} className="text-[#16A34A]" /> SYSTEM RELIABILITY
+            </h2>
+          </div>
+
+          <div className="space-y-4 font-mono">
+            <div className="p-4 bg-[#171717] border-2 border-[#333333]">
+              <div className="text-xs text-[#A3A3A3] uppercase">DELIVERY SUCCESS RATE</div>
+              <div className="text-4xl font-bold text-[#16A34A] my-1">{reliability.successRate}%</div>
+              <div className="text-[10px] text-[#737373]">
+                {reliability.totalSent} delivered / {reliability.totalAttempted} attempted
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-3 bg-[#171717] border-2 border-[#333333]">
+                <div className="text-[#A3A3A3] text-[10px] uppercase">PENDING</div>
+                <div className="text-xl font-bold text-[#CA8A04] mt-0.5">{reliability.pendingScheduled}</div>
+              </div>
+              <div className="p-3 bg-[#171717] border-2 border-[#333333]">
+                <div className="text-[#A3A3A3] text-[10px] uppercase">FAILURES</div>
+                <div className="text-xl font-bold text-[#EF4444] mt-0.5">{reliability.totalFailed}</div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-[#171717] border-2 border-[#333333] text-xs">
+              <div className="text-[#A3A3A3] text-[10px] uppercase mb-1">SCHEDULER STATUS</div>
+              <div className="flex items-center gap-2 font-bold text-[#16A34A]">
+                <span className="w-2.5 h-2.5 bg-[#16A34A] rounded-full animate-pulse" />
+                {reliability.schedulerStatus} // READY
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Activity List */}
+        <div className="bg-[#FAFAFA] border-4 border-[#0A0A0A] p-6 space-y-4 lg:col-span-2">
+          <div className="border-b-2 border-[#0A0A0A] pb-3 flex items-center justify-between">
+            <h2 className="font-display text-xl uppercase text-[#0A0A0A] flex items-center gap-2">
+              <Activity size={18} className="text-[#EF4444]" /> RECENT ACTIVITY FEED
+            </h2>
+            <span className="font-mono text-[10px] font-bold text-[#737373] uppercase">LIVE STREAM</span>
+          </div>
+
+          {recentActivity.length === 0 ? (
+            <div className="p-8 border-2 border-dashed border-[#D4D4D4] font-mono text-xs text-[#737373] uppercase text-center">
+              No recent activity recorded yet.
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {recentActivity.map((evt: any) => (
+                <div key={evt.id} className="p-3 border-2 border-[#0A0A0A] bg-[#FAFAFA] flex items-center justify-between font-mono text-xs">
+                  <div className="flex items-center gap-3">
+                    <span className="px-2 py-0.5 bg-[#0A0A0A] text-[#FAFAFA] text-[9px] font-bold uppercase">
+                      {evt.type.replace('_', ' ')}
+                    </span>
+                    <div>
+                      <div className="font-bold text-[#0A0A0A]">
+                        {evt.reminder_title ? `📌 ${evt.reminder_title}` : evt.chat_title || 'Activity'}
+                      </div>
+                      <div className="text-[10px] text-[#737373]">
+                        {evt.user_name} • {evt.chat_title}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right text-[10px] text-[#525252]">
+                    {formatLocalDateTime(evt.timestamp, 'Asia/Kolkata', 'h:mm a')}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

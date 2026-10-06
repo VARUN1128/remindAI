@@ -360,4 +360,239 @@ export class DbRepository {
       .eq('chat_id', chatId)
       .eq('user_id', userId);
   }
+
+  // --- OWNER ANALYTICS ---
+  static async getOwnerAnalytics(activeWindowDays = 30) {
+    if (isDemoMode || !supabase) {
+      return mockDb.getOwnerAnalytics(activeWindowDays);
+    }
+
+    const [
+      { count: totalUsers },
+      { count: totalChats },
+      { count: totalReminders },
+      { count: scheduledReminders },
+      { count: sentReminders },
+      { count: failedReminders },
+      { count: cancelledReminders },
+      { count: groupChats },
+      { count: privateChats },
+    ] = await Promise.all([
+      supabase.from('users').select('*', { count: 'exact', head: true }),
+      supabase.from('chats').select('*', { count: 'exact', head: true }),
+      supabase.from('reminders').select('*', { count: 'exact', head: true }),
+      supabase.from('reminders').select('*', { count: 'exact', head: true }).eq('status', 'scheduled'),
+      supabase.from('reminders').select('*', { count: 'exact', head: true }).eq('status', 'sent'),
+      supabase.from('reminders').select('*', { count: 'exact', head: true }).eq('status', 'failed'),
+      supabase.from('reminders').select('*', { count: 'exact', head: true }).eq('status', 'cancelled'),
+      supabase.from('chats').select('*', { count: 'exact', head: true }).in('chat_type', ['group', 'supergroup']),
+      supabase.from('chats').select('*', { count: 'exact', head: true }).eq('chat_type', 'private'),
+    ]);
+
+    // Group Reminders
+    const { data: groupChatsList } = await supabase
+      .from('chats')
+      .select('id')
+      .in('chat_type', ['group', 'supergroup']);
+
+    const groupChatIds = (groupChatsList || []).map((c) => c.id);
+    let groupReminders = 0;
+    if (groupChatIds.length > 0) {
+      const { count: gRemCount } = await supabase
+        .from('reminders')
+        .select('*', { count: 'exact', head: true })
+        .in('chat_id', groupChatIds);
+      groupReminders = gRemCount || 0;
+    }
+
+    const tot = totalReminders || 0;
+    const privRem = tot - groupReminders;
+    const sent = sentReminders || 0;
+    const failed = failedReminders || 0;
+    const attempted = sent + failed;
+    const deliverySuccessRate = attempted > 0 ? Math.round((sent / attempted) * 100) : 100;
+
+    return {
+      totalUsers: totalUsers || 0,
+      activeUsers: totalUsers || 0,
+      totalChats: totalChats || 0,
+      totalReminders: tot,
+      scheduledReminders: scheduledReminders || 0,
+      sentReminders: sent,
+      failedReminders: failed,
+      cancelledReminders: cancelledReminders || 0,
+      groupChats: groupChats || 0,
+      privateChats: privateChats || 0,
+      privateReminders: privRem >= 0 ? privRem : 0,
+      groupReminders,
+      deliverySuccessRate,
+    };
+  }
+
+  static async getUserGrowth(period: 'daily' | 'weekly' | 'monthly' = 'daily') {
+    if (isDemoMode || !supabase) {
+      return mockDb.getUserGrowth(period);
+    }
+    const { data } = await supabase.from('users').select('created_at').order('created_at', { ascending: true });
+    const map = new Map<string, number>();
+    (data || []).forEach((u) => {
+      const dateKey = u.created_at ? u.created_at.substring(0, 10) : new Date().toISOString().substring(0, 10);
+      map.set(dateKey, (map.get(dateKey) || 0) + 1);
+    });
+    return Array.from(map.entries())
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  static async getReminderActivity(period: 'daily' | 'weekly' | 'monthly' = 'daily') {
+    if (isDemoMode || !supabase) {
+      return mockDb.getReminderActivity(period);
+    }
+    const { data } = await supabase.from('reminders').select('created_at, status').order('created_at', { ascending: true });
+    const map = new Map<string, { created: number; sent: number; failed: number; cancelled: number }>();
+    (data || []).forEach((r) => {
+      const dateKey = r.created_at ? r.created_at.substring(0, 10) : new Date().toISOString().substring(0, 10);
+      const curr = map.get(dateKey) || { created: 0, sent: 0, failed: 0, cancelled: 0 };
+      curr.created++;
+      if (r.status === 'sent') curr.sent++;
+      if (r.status === 'failed') curr.failed++;
+      if (r.status === 'cancelled') curr.cancelled++;
+      map.set(dateKey, curr);
+    });
+    return Array.from(map.entries())
+      .map(([date, stats]) => ({ date, ...stats }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  static async getTopUsers(limit = 5) {
+    if (isDemoMode || !supabase) {
+      return mockDb.getTopUsers(limit);
+    }
+    const users = await this.getUsers();
+    const reminders = await this.getReminders();
+
+    return users
+      .map((u) => {
+        const userRems = reminders.filter((r) => r.created_by_user_id === u.id);
+        const sent = userRems.filter((r) => r.status === 'sent').length;
+        const sortedRems = [...userRems].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const lastRem = sortedRems[0];
+        return {
+          user: u,
+          totalReminders: userRems.length,
+          sentReminders: sent,
+          lastActive: lastRem ? lastRem.created_at : u.created_at,
+        };
+      })
+      .sort((a, b) => b.totalReminders - a.totalReminders)
+      .slice(0, limit);
+  }
+
+  static async getTopGroups(limit = 5) {
+    if (isDemoMode || !supabase) {
+      return mockDb.getTopGroups(limit);
+    }
+    const chats = await this.getChats();
+    const groups = chats.filter((c) => c.chat_type === 'group' || c.chat_type === 'supergroup');
+    const reminders = await this.getReminders();
+
+    return groups
+      .map((c) => {
+        const groupRems = reminders.filter((r) => r.chat_id === c.id);
+        const sent = groupRems.filter((r) => r.status === 'sent').length;
+        const sortedRems = [...groupRems].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const lastRem = sortedRems[0];
+        return {
+          chat: c,
+          totalReminders: groupRems.length,
+          sentReminders: sent,
+          lastActive: lastRem ? lastRem.created_at : c.created_at,
+        };
+      })
+      .sort((a, b) => b.totalReminders - a.totalReminders)
+      .slice(0, limit);
+  }
+
+  static async getRecentActivity(limit = 10) {
+    if (isDemoMode || !supabase) {
+      return mockDb.getRecentActivity(limit);
+    }
+    const logs = await this.getLogs();
+    const reminders = await this.getReminders();
+
+    const events: any[] = [];
+    reminders.forEach((r) => {
+      events.push({
+        id: `evt-rem-${r.id}`,
+        type: 'REMINDER_CREATED',
+        user_name: (r.created_by as any)?.display_name || 'User',
+        chat_title: (r.chat as any)?.chat_title || 'Chat',
+        reminder_title: r.title,
+        timestamp: r.created_at,
+        status: r.status,
+      });
+    });
+
+    logs.forEach((l) => {
+      events.push({
+        id: `evt-log-${l.id}`,
+        type: l.delivery_status === 'success' ? 'REMINDER_SENT' : 'REMINDER_FAILED',
+        user_name: 'System Scheduler',
+        chat_title: `Chat #${l.telegram_chat_id}`,
+        reminder_title: (l.reminder as any)?.title || 'Reminder',
+        timestamp: l.sent_at,
+        status: l.delivery_status,
+        details: l.error_message || undefined,
+      });
+    });
+
+    return events
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, limit);
+  }
+
+  static async getAIIntentMetrics() {
+    if (isDemoMode || !supabase) {
+      return mockDb.getAIIntentMetrics();
+    }
+    const reminders = await this.getReminders();
+    const counts: Record<string, number> = {
+      CREATE_REMINDER: reminders.length,
+      UPDATE_REMINDER: 0,
+      CANCEL_REMINDER: reminders.filter((r) => r.status === 'cancelled').length,
+      LIST_REMINDERS: 0,
+      CLARIFY: 0,
+      OUT_OF_SCOPE: 0,
+      GREETING: 0,
+      ACKNOWLEDGEMENT: 0,
+    };
+
+    return Object.entries(counts).map(([intent, count]) => ({
+      intent: intent as any,
+      count,
+    }));
+  }
+
+  static async getSystemReliability() {
+    if (isDemoMode || !supabase) {
+      return mockDb.getSystemReliability();
+    }
+    const reminders = await this.getReminders();
+    const logs = await this.getLogs();
+
+    const sent = reminders.filter((r) => r.status === 'sent').length;
+    const failed = reminders.filter((r) => r.status === 'failed').length;
+    const pending = reminders.filter((r) => r.status === 'scheduled').length;
+    const attempted = sent + failed;
+
+    return {
+      totalAttempted: attempted,
+      totalSent: sent,
+      totalFailed: failed,
+      pendingScheduled: pending,
+      successRate: attempted > 0 ? Math.round((sent / attempted) * 100) : 100,
+      schedulerStatus: 'ACTIVE' as const,
+      recentFailures: logs.filter((l) => l.delivery_status === 'failed').slice(0, 5),
+    };
+  }
 }

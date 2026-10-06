@@ -376,6 +376,208 @@ class MockDatabase {
   public async clearContext(chatId: string, userId: string): Promise<void> {
     this.contexts = this.contexts.filter((c) => !(c.chat_id === chatId && c.user_id === userId));
   }
+
+  // --- Analytics Aggregations ---
+  public async getOwnerAnalytics(activeWindowDays = 30) {
+    const totalUsers = this.users.length;
+    const now = Date.now();
+    const activeCutoff = now - activeWindowDays * 24 * 60 * 60 * 1000;
+
+    const activeUserIds = new Set<string>();
+    this.reminders.forEach((r) => {
+      if (new Date(r.created_at).getTime() >= activeCutoff) {
+        activeUserIds.add(r.created_by_user_id);
+      }
+    });
+    this.users.forEach((u) => {
+      if (new Date(u.created_at).getTime() >= activeCutoff) {
+        activeUserIds.add(u.id);
+      }
+    });
+
+    const totalChats = this.chats.length;
+    const totalReminders = this.reminders.length;
+    const scheduledReminders = this.reminders.filter((r) => r.status === 'scheduled').length;
+    const sentReminders = this.reminders.filter((r) => r.status === 'sent').length;
+    const failedReminders = this.reminders.filter((r) => r.status === 'failed').length;
+    const cancelledReminders = this.reminders.filter((r) => r.status === 'cancelled').length;
+
+    const groupChats = this.chats.filter((c) => c.chat_type === 'group' || c.chat_type === 'supergroup').length;
+    const privateChats = this.chats.filter((c) => c.chat_type === 'private').length;
+
+    const groupChatIds = new Set(
+      this.chats.filter((c) => c.chat_type === 'group' || c.chat_type === 'supergroup').map((c) => c.id)
+    );
+    const groupReminders = this.reminders.filter((r) => groupChatIds.has(r.chat_id)).length;
+    const privateReminders = totalReminders - groupReminders;
+
+    const attempted = sentReminders + failedReminders;
+    const deliverySuccessRate = attempted > 0 ? Math.round((sentReminders / attempted) * 100) : 100;
+
+    return {
+      totalUsers,
+      activeUsers: activeUserIds.size,
+      totalChats,
+      totalReminders,
+      scheduledReminders,
+      sentReminders,
+      failedReminders,
+      cancelledReminders,
+      groupChats,
+      privateChats,
+      privateReminders,
+      groupReminders,
+      deliverySuccessRate,
+    };
+  }
+
+  public async getUserGrowth(period: 'daily' | 'weekly' | 'monthly' = 'daily') {
+    const map = new Map<string, number>();
+
+    this.users.forEach((u) => {
+      const dateKey = u.created_at ? u.created_at.substring(0, 10) : new Date().toISOString().substring(0, 10);
+      map.set(dateKey, (map.get(dateKey) || 0) + 1);
+    });
+
+    return Array.from(map.entries())
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  public async getReminderActivity(period: 'daily' | 'weekly' | 'monthly' = 'daily') {
+    const map = new Map<string, { created: number; sent: number; failed: number; cancelled: number }>();
+
+    this.reminders.forEach((r) => {
+      const dateKey = r.created_at ? r.created_at.substring(0, 10) : new Date().toISOString().substring(0, 10);
+      const curr = map.get(dateKey) || { created: 0, sent: 0, failed: 0, cancelled: 0 };
+      curr.created++;
+      if (r.status === 'sent') curr.sent++;
+      if (r.status === 'failed') curr.failed++;
+      if (r.status === 'cancelled') curr.cancelled++;
+      map.set(dateKey, curr);
+    });
+
+    return Array.from(map.entries())
+      .map(([date, stats]) => ({ date, ...stats }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  public async getTopUsers(limit = 5) {
+    return this.users
+      .map((u) => {
+        const userRems = this.reminders.filter((r) => r.created_by_user_id === u.id);
+        const sent = userRems.filter((r) => r.status === 'sent').length;
+        const sortedRems = [...userRems].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const lastRem = sortedRems[0];
+        return {
+          user: u,
+          totalReminders: userRems.length,
+          sentReminders: sent,
+          lastActive: lastRem ? lastRem.created_at : u.created_at,
+        };
+      })
+      .sort((a, b) => b.totalReminders - a.totalReminders)
+      .slice(0, limit);
+  }
+
+  public async getTopGroups(limit = 5) {
+    const groups = this.chats.filter((c) => c.chat_type === 'group' || c.chat_type === 'supergroup');
+    return groups
+      .map((c) => {
+        const groupRems = this.reminders.filter((r) => r.chat_id === c.id);
+        const sent = groupRems.filter((r) => r.status === 'sent').length;
+        const sortedRems = [...groupRems].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        const lastRem = sortedRems[0];
+        return {
+          chat: c,
+          totalReminders: groupRems.length,
+          sentReminders: sent,
+          lastActive: lastRem ? lastRem.created_at : c.created_at,
+        };
+      })
+      .sort((a, b) => b.totalReminders - a.totalReminders)
+      .slice(0, limit);
+  }
+
+  public async getRecentActivity(limit = 10) {
+    const events: Array<{
+      id: string;
+      type: 'REMINDER_CREATED' | 'REMINDER_SENT' | 'REMINDER_FAILED' | 'REMINDER_CANCELLED' | 'NEW_USER' | 'NEW_GROUP';
+      user_name?: string | null;
+      chat_title?: string | null;
+      reminder_title?: string | null;
+      timestamp: string;
+      status?: string | null;
+      details?: string | null;
+    }> = [];
+
+    this.reminders.forEach((r) => {
+      const u = this.users.find((user) => user.id === r.created_by_user_id);
+      const c = this.chats.find((chat) => chat.id === r.chat_id);
+      events.push({
+        id: `evt-rem-${r.id}`,
+        type: 'REMINDER_CREATED',
+        user_name: u?.display_name || 'User',
+        chat_title: c?.chat_title || 'Chat',
+        reminder_title: r.title,
+        timestamp: r.created_at,
+        status: r.status,
+      });
+    });
+
+    this.logs.forEach((l) => {
+      const r = this.reminders.find((rem) => rem.id === l.reminder_id);
+      events.push({
+        id: `evt-log-${l.id}`,
+        type: l.delivery_status === 'success' ? 'REMINDER_SENT' : 'REMINDER_FAILED',
+        user_name: 'System Scheduler',
+        chat_title: `Chat #${l.telegram_chat_id}`,
+        reminder_title: r?.title || 'Reminder',
+        timestamp: l.sent_at,
+        status: l.delivery_status,
+        details: l.error_message || undefined,
+      });
+    });
+
+    return events
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, limit);
+  }
+
+  public async getAIIntentMetrics() {
+    const counts: Record<string, number> = {
+      CREATE_REMINDER: this.reminders.length,
+      UPDATE_REMINDER: 0,
+      CANCEL_REMINDER: this.reminders.filter((r) => r.status === 'cancelled').length,
+      LIST_REMINDERS: 0,
+      CLARIFY: this.contexts.length,
+      OUT_OF_SCOPE: 0,
+      GREETING: 0,
+      ACKNOWLEDGEMENT: 0,
+    };
+
+    return Object.entries(counts).map(([intent, count]) => ({
+      intent: intent as any,
+      count,
+    }));
+  }
+
+  public async getSystemReliability() {
+    const sent = this.reminders.filter((r) => r.status === 'sent').length;
+    const failed = this.reminders.filter((r) => r.status === 'failed').length;
+    const pending = this.reminders.filter((r) => r.status === 'scheduled').length;
+    const attempted = sent + failed;
+
+    return {
+      totalAttempted: attempted,
+      totalSent: sent,
+      totalFailed: failed,
+      pendingScheduled: pending,
+      successRate: attempted > 0 ? Math.round((sent / attempted) * 100) : 100,
+      schedulerStatus: 'ACTIVE' as const,
+      recentFailures: this.logs.filter((l) => l.delivery_status === 'failed').slice(0, 5),
+    };
+  }
 }
 
 // Global Singleton for in-memory mock store
