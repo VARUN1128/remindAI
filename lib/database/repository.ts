@@ -275,9 +275,9 @@ export class DbRepository {
     return Boolean(!error && data && data.length > 0);
   }
 
-  static async markInstanceSent(instanceId: string): Promise<void> {
+  static async markInstanceSent(instanceId: string, reminderId?: string): Promise<void> {
     if (isDemoMode || !supabase) {
-      return mockDb.markInstanceSent(instanceId);
+      return mockDb.markInstanceSent(instanceId, reminderId);
     }
 
     const now = new Date().toISOString();
@@ -285,6 +285,32 @@ export class DbRepository {
       .from('reminder_instances')
       .update({ status: 'sent', sent_at: now })
       .eq('id', instanceId);
+
+    if (reminderId) {
+      await supabase
+        .from('reminders')
+        .update({ status: 'sent', updated_at: now })
+        .eq('id', reminderId);
+    }
+  }
+
+  static async markInstanceFailed(instanceId: string, reminderId?: string, errorMsg?: string): Promise<void> {
+    if (isDemoMode || !supabase) {
+      return mockDb.markInstanceFailed(instanceId, reminderId, errorMsg);
+    }
+
+    const now = new Date().toISOString();
+    await supabase
+      .from('reminder_instances')
+      .update({ status: 'failed' })
+      .eq('id', instanceId);
+
+    if (reminderId) {
+      await supabase
+        .from('reminders')
+        .update({ status: 'failed', updated_at: now })
+        .eq('id', reminderId);
+    }
   }
 
   static async logDelivery(data: Omit<ReminderLog, 'id' | 'created_at'>): Promise<void> {

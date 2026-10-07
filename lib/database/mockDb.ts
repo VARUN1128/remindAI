@@ -314,14 +314,31 @@ class MockDatabase {
     return true;
   }
 
-  public async markInstanceSent(instanceId: string): Promise<void> {
+  public async markInstanceSent(instanceId: string, reminderId?: string): Promise<void> {
     const inst = this.reminderInstances.find((i) => i.id === instanceId);
     if (inst) {
       inst.status = 'sent';
       inst.sent_at = new Date().toISOString();
-      const parentRem = this.reminders.find((r) => r.id === inst.reminder_id);
-      if (parentRem && parentRem.recurrence_type === 'none') {
+    }
+    const remId = reminderId || inst?.reminder_id;
+    if (remId) {
+      const parentRem = this.reminders.find((r) => r.id === remId);
+      if (parentRem) {
         parentRem.status = 'sent';
+      }
+    }
+  }
+
+  public async markInstanceFailed(instanceId: string, reminderId?: string, errorMsg?: string): Promise<void> {
+    const inst = this.reminderInstances.find((i) => i.id === instanceId);
+    if (inst) {
+      inst.status = 'failed';
+    }
+    const remId = reminderId || inst?.reminder_id;
+    if (remId) {
+      const parentRem = this.reminders.find((r) => r.id === remId);
+      if (parentRem) {
+        parentRem.status = 'failed';
       }
     }
   }

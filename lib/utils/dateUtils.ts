@@ -226,3 +226,100 @@ export function getRelativeTimeString(
     return '';
   }
 }
+
+export interface ExtractedPurposeAndTiming {
+  purpose: string | null;
+  timing: {
+    time_type: 'relative' | 'absolute';
+    duration_seconds?: number;
+    reminder_time: string;
+  } | null;
+}
+
+/**
+ * Dynamically extract PURPOSE and TIMING regardless of sentence word order
+ */
+export function extractPurposeAndTiming(
+  text: string,
+  timeZone: string = DEFAULT_TIMEZONE,
+  referenceDate: Date = new Date()
+): ExtractedPurposeAndTiming {
+  const lower = text.toLowerCase().trim();
+
+  // 1. Check for dynamic relative duration
+  const relativeMatch = lower.match(/(?:in|within|after)?\s*(\d+)\s*(?:second|sec|s|minute|min|m|hour|hr|h|day|d)s?\b/i);
+  let timing: ExtractedPurposeAndTiming['timing'] = null;
+  let textWithoutTime = text;
+
+  if (relativeMatch) {
+    const durationSecs = extractRelativeDuration(relativeMatch[0]);
+    if (durationSecs !== null) {
+      timing = {
+        time_type: 'relative',
+        duration_seconds: durationSecs,
+        reminder_time: calculateRelativeInstant(durationSecs, referenceDate, timeZone),
+      };
+      textWithoutTime = text.replace(new RegExp(relativeMatch[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '');
+    }
+  } else {
+    // 2. Check for absolute clock / date expressions
+    const dateWordMatch = lower.match(/\b(today|tomorrow|friday|monday|tuesday|wednesday|thursday|saturday|sunday)\b/i);
+    const clockMatch = lower.match(/(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) || lower.match(/\b(\d{1,2}):(\d{2})\b/);
+
+    if (clockMatch || dateWordMatch) {
+      let dayOffset = 0;
+      if (dateWordMatch) {
+        if (dateWordMatch[1].toLowerCase() === 'tomorrow') {
+          dayOffset = 1;
+        }
+      }
+
+      let hour = 9;
+      let min = 0;
+
+      if (clockMatch) {
+        let h = parseInt(clockMatch[1], 10);
+        const m = clockMatch[2] ? parseInt(clockMatch[2], 10) : 0;
+        const meridiem = clockMatch[3]?.toLowerCase();
+        if (meridiem === 'pm' && h < 12) h += 12;
+        if (meridiem === 'am' && h === 12) h = 0;
+        hour = h;
+        min = m;
+      }
+
+      const iso = parseAbsoluteLocalTime(hour, min, timeZone, referenceDate, dayOffset);
+      timing = {
+        time_type: 'absolute',
+        reminder_time: iso,
+      };
+
+      textWithoutTime = text
+        .replace(/\b(today|tomorrow|friday|monday|tuesday|wednesday|thursday|saturday|sunday)\b/gi, '')
+        .replace(/(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/gi, '')
+        .replace(/\b\d{1,2}:\d{2}\b/g, '');
+    }
+  }
+
+  // Clean remaining purpose text
+  let cleaned = textWithoutTime
+    .replace(/^(please\s+)?remind\s+(me|us|everyone)\s+/i, '')
+    .replace(/^don't\s+(let\s+me\s+)?forget\s+(to\s+)?/i, '')
+    .replace(/^remind\s+/i, '')
+    .replace(/^to\s+/i, '')
+    .replace(/\s+(remind\s+me|remind\s+us|remind\s+everyone)\s+/i, ' ')
+    .replace(/\s+to\s+remind\s+me\s+/i, ' ')
+    .replace(/\s+(at|on|in|within|after|today|tomorrow)\s*$/i, '')
+    .trim();
+
+  cleaned = cleaned.replace(/^(to|about|for|that)\s+/i, '').trim();
+
+  let purpose: string | null = null;
+  if (cleaned.length > 0 && !cleaned.toLowerCase().match(/^(remind|me|to)$/)) {
+    purpose = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+
+  return {
+    purpose,
+    timing,
+  };
+}

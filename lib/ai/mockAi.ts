@@ -1,5 +1,6 @@
 import { AIExtractedPayload } from '@/types';
 import {
+  extractPurposeAndTiming,
   parseRelativeDateText,
   parseTimeInput,
   parseAbsoluteLocalTime,
@@ -102,24 +103,42 @@ export function mockParseUserMessage(
   }
 
   // 4. Handle multi-turn clarification answer if pending context exists
-  if (pendingContext && pendingContext.context_type === 'AWAITING_TIME') {
-    const parsedTimeObj =
-      parseRelativeDateText(text, timezone, now) || parseTimeInput(text, now, timezone);
+  if (pendingContext) {
+    if (pendingContext.context_type === 'AWAITING_TIME') {
+      const parsedTimeObj =
+        parseRelativeDateText(text, timezone, now) || parseTimeInput(text, now, timezone);
 
-    if (parsedTimeObj && parsedTimeObj.reminder_time) {
-      return {
-        intent: 'CREATE_REMINDER',
-        title: pendingContext.context_data.title || 'Reminder',
-        event_time: pendingContext.context_data.event_time || parsedTimeObj.reminder_time,
-        reminder_time: parsedTimeObj.reminder_time,
-        time_type: parsedTimeObj.time_type,
-        duration_seconds: parsedTimeObj.duration_seconds || null,
-        timezone,
-        recurrence: 'none',
-        target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
-        needs_clarification: false,
-        clarification_question: null,
-      };
+      if (parsedTimeObj && parsedTimeObj.reminder_time) {
+        return {
+          intent: 'CREATE_REMINDER',
+          title: pendingContext.context_data.title || 'Reminder',
+          event_time: pendingContext.context_data.event_time || parsedTimeObj.reminder_time,
+          reminder_time: parsedTimeObj.reminder_time,
+          time_type: parsedTimeObj.time_type,
+          duration_seconds: parsedTimeObj.duration_seconds || null,
+          timezone,
+          recurrence: 'none',
+          target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
+          needs_clarification: false,
+          clarification_question: null,
+        };
+      }
+    } else if (pendingContext.context_type === 'AWAITING_TITLE') {
+      const purpose = text.trim();
+      if (purpose) {
+        return {
+          intent: 'CREATE_REMINDER',
+          title: purpose.charAt(0).toUpperCase() + purpose.slice(1),
+          event_time: pendingContext.context_data.reminder_time,
+          reminder_time: pendingContext.context_data.reminder_time,
+          time_type: pendingContext.context_data.time_type || 'absolute',
+          timezone,
+          recurrence: 'none',
+          target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
+          needs_clarification: false,
+          clarification_question: null,
+        };
+      }
     }
   }
 
@@ -167,43 +186,6 @@ export function mockParseUserMessage(
     };
   }
 
-  // UPDATE REMINDER
-  if (lower.startsWith('move') || lower.startsWith('update') || lower.startsWith('change')) {
-    const query = text;
-    return {
-      intent: 'UPDATE_REMINDER',
-      title: query,
-      search_query: query,
-      timezone,
-      needs_clarification: false,
-      clarification_question: null,
-    };
-  }
-
-  // MISSING TIME CLARIFICATION
-  if (
-    (lower.includes('meeting friday evening') ||
-      lower === 'remind me about the meeting' ||
-      lower.includes('remind me about the assignment')) &&
-    !lower.match(/\d{1,2}\s*(pm|am|:00)/i) &&
-    !lower.match(/\b(in|within|after)\b/i)
-  ) {
-    let question = 'When would you like me to remind you?';
-    if (lower.includes('meeting friday evening')) {
-      question = 'What time is the meeting on Friday evening?';
-    } else if (lower.includes('assignment')) {
-      question = 'What date and time would you like to be reminded about the assignment?';
-    }
-    return {
-      intent: 'CLARIFY',
-      title: lower.includes('meeting') ? 'Meeting' : 'Assignment',
-      timezone,
-      needs_clarification: true,
-      clarification_question: question,
-      missing_field: 'time',
-    };
-  }
-
   // RECURRING REMINDERS ("Every Monday at 9 AM")
   if (lower.includes('every monday') || lower.includes('every day') || lower.includes('every week')) {
     const titleMatch = text.match(/to\s+(.+)$/i) || text.match(/remind me\s+(.+?)\s+every/i);
@@ -224,17 +206,18 @@ export function mockParseUserMessage(
     };
   }
 
-  // RELATIVE BEFORE EVENT ("Meeting Friday at 4 PM. Remind me 2 hours before.")
-  if (lower.includes('2 hours before') || lower.includes('before')) {
-    const friday4PM = getNextWeekdayTime(5, 16, 0, timezone, now);
-    const friday2PM = getNextWeekdayTime(5, 14, 0, timezone, now);
+  // DYNAMIC PURPOSE & TIMING EXTRACTION
+  const extracted = extractPurposeAndTiming(text, timezone, now);
 
+  // Both Purpose and Timing exist -> Create Reminder Immediately
+  if (extracted.purpose && extracted.timing) {
     return {
       intent: 'CREATE_REMINDER',
-      title: 'Meeting',
-      event_time: friday4PM,
-      reminder_time: friday2PM,
-      time_type: 'absolute',
+      title: extracted.purpose,
+      event_time: extracted.timing.reminder_time,
+      reminder_time: extracted.timing.reminder_time,
+      time_type: extracted.timing.time_type,
+      duration_seconds: extracted.timing.duration_seconds || null,
       timezone,
       recurrence: 'none',
       target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
@@ -243,52 +226,11 @@ export function mockParseUserMessage(
     };
   }
 
-  // NORMAL REMINDER ("Remind me tomorrow at 6 PM to submit my assignment")
-  if (lower.includes('tomorrow at 6') || (lower.includes('tomorrow') && lower.includes('6'))) {
-    const tomorrow6PMObj = parseRelativeDateText('tomorrow at 6 PM', timezone, now);
-    const timeVal = tomorrow6PMObj?.reminder_time || getCurrentISOString(timezone);
-    return {
-      intent: 'CREATE_REMINDER',
-      title: 'Submit assignment',
-      event_time: timeVal,
-      reminder_time: timeVal,
-      time_type: 'absolute',
-      timezone,
-      recurrence: 'none',
-      target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
-      needs_clarification: false,
-      clarification_question: null,
-    };
-  }
-
-  // GROUP REMINDER ("Guys, presentation Friday at 10 AM. Remind everyone Thursday evening")
-  if (lower.includes('presentation friday') || lower.includes('remind everyone')) {
-    const thursday7PM = getNextWeekdayTime(4, 19, 0, timezone, now);
-    const friday10AM = getNextWeekdayTime(5, 10, 0, timezone, now);
-
-    return {
-      intent: 'CREATE_REMINDER',
-      title: 'Project Presentation',
-      event_time: friday10AM,
-      reminder_time: thursday7PM,
-      time_type: 'absolute',
-      timezone,
-      recurrence: 'none',
-      target: 'GROUP',
-      needs_clarification: false,
-      clarification_question: null,
-    };
-  }
-
-  // Generic relative or absolute date parsing fallback
-  const parsedTimeObj =
-    parseRelativeDateText(text, timezone, now) || parseTimeInput(text, now, timezone);
-  const titleStr = extractTitle(text);
-
-  if (!parsedTimeObj && !lower.includes('list')) {
+  // Purpose exists BUT Time is missing -> Ask for Time
+  if (extracted.purpose && !extracted.timing) {
     return {
       intent: 'CLARIFY',
-      title: titleStr || 'Task',
+      title: extracted.purpose,
       timezone,
       needs_clarification: true,
       clarification_question: 'When would you like me to set this reminder for?',
@@ -296,20 +238,28 @@ export function mockParseUserMessage(
     };
   }
 
-  const finalTime = parsedTimeObj?.reminder_time || getCurrentISOString(timezone);
+  // Time exists BUT Purpose is missing -> Ask for Purpose
+  if (!extracted.purpose && extracted.timing) {
+    return {
+      intent: 'CLARIFY',
+      event_time: extracted.timing.reminder_time,
+      reminder_time: extracted.timing.reminder_time,
+      time_type: extracted.timing.time_type,
+      timezone,
+      needs_clarification: true,
+      clarification_question: 'What would you like me to remind you about?',
+      missing_field: 'title',
+    };
+  }
 
+  // Fallback -> Ask for clarification
   return {
-    intent: 'CREATE_REMINDER',
-    title: titleStr || 'Reminder',
-    event_time: finalTime,
-    reminder_time: finalTime,
-    time_type: parsedTimeObj?.time_type || 'absolute',
-    duration_seconds: parsedTimeObj?.duration_seconds || null,
+    intent: 'CLARIFY',
+    title: 'Reminder',
     timezone,
-    recurrence: 'none',
-    target: chatType === 'private' ? 'PRIVATE_CHAT' : 'GROUP',
-    needs_clarification: false,
-    clarification_question: null,
+    needs_clarification: true,
+    clarification_question: 'When would you like me to set this reminder for?',
+    missing_field: 'time',
   };
 }
 
@@ -326,26 +276,4 @@ function getNextWeekdayTime(
   if (daysToAdd === 0) daysToAdd = 7;
 
   return parseAbsoluteLocalTime(hour, min, timeZone, referenceInstant, daysToAdd);
-}
-
-function extractTitle(text: string): string {
-  const toMatch = text.match(/\bto\s+(.+)$/i);
-  if (toMatch) {
-    return toMatch[1].trim().charAt(0).toUpperCase() + toMatch[1].trim().slice(1);
-  }
-
-  let cleaned = text
-    .replace(/^remind\s+(me|everyone|us)\s+/i, '')
-    .replace(/^don't let me forget to\s+/i, '')
-    .replace(/^to\s+/i, '');
-
-  const atPos = cleaned.search(
-    /\s+(at|tomorrow|friday|monday|tuesday|wednesday|thursday|saturday|sunday|on|in|within|after)\s+/i
-  );
-  if (atPos > 0) {
-    cleaned = cleaned.substring(0, atPos);
-  }
-  cleaned = cleaned.trim();
-  if (!cleaned) cleaned = 'Reminder';
-  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }

@@ -54,13 +54,9 @@ export class TelegramProvider implements MessagingProvider {
     let text = '';
 
     if (isGroup) {
-      text = `👥 <b>GROUP REMINDER</b>\n\n📌 <b>${title}</b>\n\n${
-        timeText ? `Scheduled for: ${timeText}\n` : ''
-      }${extraInfo ? `${extraInfo}\n\n` : ''}Good luck everyone! 🚀`;
+      text = `👥 <b>Group Reminder</b>\n\n<b>${title}</b>\n\nIt is time for your reminder.`;
     } else {
-      text = `🔔 <b>REMINDER</b>\n\n📌 <b>${title}</b>\n\n${
-        timeText ? `Time: ${timeText}\n` : "It's time for your scheduled commitment."
-      }${extraInfo ? `\n${extraInfo}` : ''}`;
+      text = `🔔 <b>Reminder</b>\n\n<b>${title}</b>\n\nIt is time for your reminder.`;
     }
 
     return this.sendMessage(chatId, text);

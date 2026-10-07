@@ -94,9 +94,12 @@ export async function POST(req: NextRequest) {
 
       case 'CREATE_REMINDER': {
         if (aiResult.needs_clarification && aiResult.clarification_question) {
-          await ContextManager.setPendingContext(dbChat.id, dbUser.id, 'AWAITING_TIME', {
+          const contextType = aiResult.missing_field === 'title' ? 'AWAITING_TITLE' : 'AWAITING_TIME';
+          await ContextManager.setPendingContext(dbChat.id, dbUser.id, contextType, {
             title: aiResult.title,
             event_time: aiResult.event_time,
+            reminder_time: aiResult.reminder_time,
+            time_type: aiResult.time_type,
           });
           responseText = aiResult.clarification_question;
         } else {
@@ -140,8 +143,11 @@ export async function POST(req: NextRequest) {
 
       case 'CLARIFY': {
         if (aiResult.clarification_question) {
-          await ContextManager.setPendingContext(dbChat.id, dbUser.id, 'AWAITING_TIME', {
+          const contextType = aiResult.missing_field === 'title' ? 'AWAITING_TITLE' : 'AWAITING_TIME';
+          await ContextManager.setPendingContext(dbChat.id, dbUser.id, contextType, {
             title: aiResult.title,
+            reminder_time: aiResult.reminder_time,
+            time_type: aiResult.time_type,
           });
           responseText = aiResult.clarification_question;
         } else {

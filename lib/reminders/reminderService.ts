@@ -172,28 +172,50 @@ export class ReminderService {
    * PROCESS DUE REMINDERS (IDEMPOTENT SCHEDULER ENGINE)
    */
   static async processDueReminders(): Promise<{ processed: number; success: number; failed: number }> {
+    console.log(`[SCHEDULER] Engine started execution at ${new Date().toISOString()}`);
     const dueInstances = await DbRepository.getDueInstances();
+    console.log(`[SCHEDULER] Due detection count: ${dueInstances.length} instance(s) scheduled <= current time`);
+
     let successCount = 0;
     let failedCount = 0;
 
     for (const inst of dueInstances) {
       // 1. Claim instance atomically to prevent duplicate sends across concurrent cron jobs
       const claimed = await DbRepository.claimInstance(inst.id);
-      if (!claimed) continue; // Skip if claimed by another runner
+      if (!claimed) {
+        console.log(`[SCHEDULER] Instance ${inst.id} skipped (already claimed by concurrent runner)`);
+        continue;
+      }
 
       const reminder = inst.reminder;
       const chat = reminder.chat;
       const isGroup = chat.chat_type !== 'private';
       const timeText = formatLocalDateTime(reminder.reminder_time, chat.timezone);
 
-      // 2. Deliver message via Messaging Provider
-      const sent = await telegramProvider.sendNotification(
-        chat.telegram_chat_id,
-        reminder.title,
-        timeText,
-        isGroup,
-        reminder.description || undefined
+      console.log(
+        `[SCHEDULER] Claimed instance ${inst.id} for reminder "${reminder.title}" (Chat ID: ${chat.telegram_chat_id})`
       );
+
+      // 2. Deliver message via Messaging Provider
+      console.log(`[SCHEDULER] Telegram send attempted for chat ${chat.telegram_chat_id}`);
+      let sent = false;
+      let sendError: string | null = null;
+      try {
+        sent = await telegramProvider.sendNotification(
+          chat.telegram_chat_id,
+          reminder.title,
+          timeText,
+          isGroup,
+          reminder.description || undefined
+        );
+        if (!sent) {
+          sendError = 'Telegram Bot API returned non-ok response';
+        }
+      } catch (err: any) {
+        console.error(`[SCHEDULER] Telegram send Exception for reminder ${reminder.id}:`, err?.message || err);
+        sendError = err?.message || 'Telegram delivery exception';
+        sent = false;
+      }
 
       // 3. Log execution audit
       await DbRepository.logDelivery({
@@ -202,16 +224,27 @@ export class ReminderService {
         telegram_chat_id: chat.telegram_chat_id,
         sent_at: new Date().toISOString(),
         delivery_status: sent ? 'success' : 'failed',
-        error_message: sent ? null : 'Failed to deliver message via provider',
+        error_message: sent ? null : (sendError || 'Failed to deliver message via Telegram Bot API'),
       });
 
       if (sent) {
-        await DbRepository.markInstanceSent(inst.id);
+        console.log(`[SCHEDULER] Telegram send SUCCESS for reminder ${reminder.id}`);
+        await DbRepository.markInstanceSent(inst.id, reminder.id);
         successCount++;
       } else {
+        console.error(`[SCHEDULER] Telegram send FAILURE for reminder ${reminder.id}`);
+        await DbRepository.markInstanceFailed(
+          inst.id,
+          reminder.id,
+          sendError || 'Failed to deliver message via Telegram Bot API'
+        );
         failedCount++;
       }
     }
+
+    console.log(
+      `[SCHEDULER] Completed execution: ${dueInstances.length} processed, ${successCount} success, ${failedCount} failed`
+    );
 
     return {
       processed: dueInstances.length,
